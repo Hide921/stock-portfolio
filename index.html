@@ -22,6 +22,17 @@
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); transition: background 0.4s; }
     .last-updated { font-size: 12px; color: var(--text-muted); }
 
+    /* ── Sync button ── */
+    .btn-sync { background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 5px; transition: all 0.15s; font-weight: 600; white-space: nowrap; }
+    .btn-sync:hover { border-color: var(--accent); color: var(--text); }
+    .btn-sync.synced { border-color: var(--green); color: var(--green); }
+    .btn-sync.syncing { border-color: var(--yellow); color: var(--yellow); }
+    .btn-sync.sync-error { border-color: var(--red); color: var(--red); }
+    .sync-instructions { font-size: 12px; color: var(--text-muted); line-height: 1.8; }
+    .sync-instructions a { color: var(--accent); text-decoration: none; }
+    .sync-instructions a:hover { text-decoration: underline; }
+    .sync-instructions ol { padding-left: 18px; margin-top: 6px; }
+
     /* ── Container ── */
     .container { max-width: 1400px; margin: 0 auto; padding: 22px; }
 
@@ -66,7 +77,7 @@
     /* ── Toolbar ── */
     .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; gap: 10px; flex-wrap: wrap; }
     .toolbar-left { display: flex; gap: 8px; align-items: center; }
-    input[type="text"], input[type="number"], select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; transition: border-color 0.15s; }
+    input[type="text"], input[type="number"], input[type="password"], select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; transition: border-color 0.15s; }
     input:focus, select:focus { border-color: var(--accent); }
     .search { width: 190px; }
     button { border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
@@ -110,7 +121,7 @@
     /* ── Modal ── */
     .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; align-items: center; justify-content: center; }
     .overlay.open { display: flex; }
-    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; width: 500px; max-width: 95vw; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; width: 500px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
     .modal h2 { font-size: 15px; margin-bottom: 18px; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .form-group { display: flex; flex-direction: column; gap: 5px; }
@@ -120,7 +131,7 @@
     .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
     .fund-note { grid-column: span 2; background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.2); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--green); display: none; }
     .fund-note.visible { display: block; }
-    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
 
     /* ── Toast ── */
     .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
@@ -140,6 +151,7 @@
       td:nth-child(4), th:nth-child(4), td:nth-child(5), th:nth-child(5) { display: none; }
       .form-grid { grid-template-columns: 1fr; }
       .form-group.full, .fund-note { grid-column: span 1; }
+      .btn-sync span:last-child { display: none; }
     }
   </style>
 </head>
@@ -155,6 +167,10 @@
     <span id="apiLabel">確認中...</span>
   </div>
   <span class="last-updated" id="lastUpdated"></span>
+  <button class="btn-sync" id="syncBtn" onclick="openSyncModal()" title="クラウド同期設定">
+    <span id="syncIcon">☁️</span>
+    <span id="syncStatusText">同期未設定</span>
+  </button>
 </header>
 
 <div class="container">
@@ -270,7 +286,7 @@
 
 </div>
 
-<!-- Modal -->
+<!-- 銘柄モーダル -->
 <div class="overlay" id="overlay" onclick="closeModal(event)">
   <div class="modal">
     <h2 id="modalTitle">銘柄を追加</h2>
@@ -327,6 +343,37 @@
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModal()">キャンセル</button>
       <button class="btn-primary" onclick="saveStock()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- クラウド同期モーダル -->
+<div class="overlay" id="syncOverlay" onclick="closeSyncModal(event)">
+  <div class="modal">
+    <h2>☁️ クラウド同期 (GitHub Gist)</h2>
+    <div class="sync-instructions">
+      <p style="margin-bottom:8px">GitHub Gistを使ってポートフォリオデータをクラウドに保存し、複数デバイスで共有できます。</p>
+      <ol>
+        <li>
+          <a href="https://github.com/settings/tokens/new?scopes=gist&description=%E6%A0%AA%E5%BC%8F%E3%83%9D%E3%83%BC%E3%83%88%E3%83%95%E3%82%A9%E3%83%AA%E3%82%AA%E5%90%8C%E6%9C%9F" target="_blank" rel="noopener">GitHubでPersonal Access Tokenを作成</a>
+          → <strong>gist</strong> スコープのみ選択してください
+        </li>
+        <li>生成されたトークンを下の欄に貼り付け</li>
+        <li>「接続」をクリック → 以降は自動保存されます</li>
+      </ol>
+    </div>
+    <div class="form-group" style="margin-top:16px">
+      <label>Personal Access Token</label>
+      <input type="password" id="syncPAT" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;font-family:monospace;letter-spacing:1px">
+      <span class="form-hint">トークンはこのデバイスのみに保存されます（外部サーバーへは送信されません）</span>
+    </div>
+    <div id="syncStatusArea" style="display:none;margin-top:12px;padding:10px 14px;border-radius:6px;font-size:12px;white-space:pre-line;line-height:1.6"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeSyncModal()">閉じる</button>
+      <button class="btn-ghost" id="syncSaveNowBtn" onclick="gistSave(false)" style="display:none">💾 今すぐ保存</button>
+      <button class="btn-ghost" id="syncLoadBtn" onclick="gistLoad(false)" style="display:none">📥 クラウドから読込</button>
+      <button class="btn-ghost" id="syncDisconnectBtn" onclick="disconnectSync()" style="display:none;color:var(--red)">接続解除</button>
+      <button class="btn-primary" id="syncConnectBtn" onclick="connectGist()">接続</button>
     </div>
   </div>
 </div>
@@ -439,20 +486,243 @@ function defaultStocks() {
   ];
 }
 
+// ── クラウド同期 (GitHub Gist) ─────────────────────────────────────
+const GIST_API = 'https://api.github.com/gists';
+let syncCfg   = { pat: '', gistId: '' };
+let syncTimer = null;
+let isSyncing = false;
+
+function loadSyncCfg() {
+  try {
+    const raw = localStorage.getItem('syncCfg');
+    if (raw) syncCfg = { ...syncCfg, ...JSON.parse(raw) };
+  } catch(e) {}
+}
+
+function saveSyncCfg() {
+  localStorage.setItem('syncCfg', JSON.stringify(syncCfg));
+}
+
+function gistHeaders() {
+  return {
+    'Authorization': `Bearer ${syncCfg.pat}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+}
+
+// デバウンス自動保存（変更から2秒後に保存）
+function scheduleSyncSave() {
+  if (!syncCfg.pat || !syncCfg.gistId) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => gistSave(true), 2000);
+}
+
+async function gistSave(silent = false) {
+  if (!syncCfg.pat || !syncCfg.gistId || isSyncing) return;
+  isSyncing = true;
+  updateSyncIcon('syncing');
+  try {
+    const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
+      method: 'PATCH',
+      headers: gistHeaders(),
+      body: JSON.stringify({
+        files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } },
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    updateSyncIcon('ok');
+    if (!silent) toast('クラウドに保存しました ☁️', 'success');
+  } catch(e) {
+    updateSyncIcon('error');
+    if (!silent) toast('クラウド保存失敗: ' + e.message, 'error');
+  } finally {
+    isSyncing = false;
+  }
+}
+
+async function gistLoad(silent = false) {
+  if (!syncCfg.pat || !syncCfg.gistId) return;
+  isSyncing = true;
+  updateSyncIcon('syncing');
+  try {
+    const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const gist    = await res.json();
+    const content = gist.files['portfolio.json']?.content;
+    if (!content) throw new Error('データファイルなし');
+    const data = JSON.parse(content);
+    if (!Array.isArray(data)) throw new Error('データ形式エラー');
+    stocks = data.map(migrateStock);
+    localStorage.setItem('stocks', JSON.stringify(stocks)); // syncなしで保存
+    document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+    render();
+    renderPieChart();
+    updateSyncIcon('ok');
+    if (!silent) {
+      toast('クラウドからデータを読み込みました ☁️', 'success');
+      showSyncStatus('success', `✓ ${data.length}件のデータを読み込みました`);
+    }
+  } catch(e) {
+    updateSyncIcon('error');
+    if (!silent) showSyncStatus('error', '読込失敗: ' + e.message);
+    else console.warn('Gist load:', e.message);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+async function connectGist() {
+  const patInput = document.getElementById('syncPAT');
+  const pat = patInput.value.trim();
+  if (!pat || pat.includes('•')) {
+    showSyncStatus('error', 'トークンを入力してください');
+    return;
+  }
+
+  const btn = document.getElementById('syncConnectBtn');
+  btn.disabled = true;
+  btn.textContent = '接続中...';
+  showSyncStatus('info', '接続を確認中...');
+  syncCfg.pat = pat;
+
+  try {
+    // PAT検証 & 既存Gistを検索
+    const listRes = await fetch(GIST_API + '?per_page=100', { headers: gistHeaders() });
+    if (!listRes.ok) throw new Error('認証失敗。トークンが無効か、gistスコープがありません。');
+
+    const gists    = await listRes.json();
+    const existing = gists.find(g => g.files['portfolio.json'] && g.description === '株式ポートフォリオデータ');
+
+    if (existing) {
+      // 既存Gistと接続
+      syncCfg.gistId = existing.id;
+      saveSyncCfg();
+      updateSyncIcon('ok');
+      setSyncModalState('connected');
+      showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nクラウドのデータを読み込んでいます...`);
+      await gistLoad(true);
+      showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nデータを読み込みました。以降は変更時に自動保存されます。`);
+    } else {
+      // 新規Gist作成
+      const createRes = await fetch(GIST_API, {
+        method: 'POST',
+        headers: gistHeaders(),
+        body: JSON.stringify({
+          description: '株式ポートフォリオデータ',
+          public: false,
+          files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } },
+        }),
+      });
+      if (!createRes.ok) throw new Error('Gist作成失敗');
+      const gist = await createRes.json();
+      syncCfg.gistId = gist.id;
+      saveSyncCfg();
+      updateSyncIcon('ok');
+      setSyncModalState('connected');
+      showSyncStatus('success', `✓ 新しいGistを作成しました\nGist ID: ${gist.id.slice(0, 10)}...\n\n現在のデータを保存済み。以降は変更時に自動保存されます。`);
+    }
+  } catch(e) {
+    showSyncStatus('error', e.message);
+    btn.disabled = false;
+    btn.textContent = '接続';
+    syncCfg.pat = '';
+  }
+}
+
+function disconnectSync() {
+  if (!confirm('クラウド同期の接続を解除しますか？\n（Gistのデータは削除されません）')) return;
+  syncCfg = { pat: '', gistId: '' };
+  saveSyncCfg();
+  updateSyncIcon('none');
+  setSyncModalState('disconnected');
+  document.getElementById('syncPAT').value = '';
+  showSyncStatus('info', '接続を解除しました');
+}
+
+function updateSyncIcon(state) {
+  const btn  = document.getElementById('syncBtn');
+  const icon = document.getElementById('syncIcon');
+  const text = document.getElementById('syncStatusText');
+  btn.className = 'btn-sync';
+  switch(state) {
+    case 'ok':      icon.textContent = '☁️'; text.textContent = '同期済み';   btn.classList.add('synced');     break;
+    case 'syncing': icon.textContent = '🔄'; text.textContent = '同期中...';  btn.classList.add('syncing');    break;
+    case 'error':   icon.textContent = '⚠️'; text.textContent = '同期エラー'; btn.classList.add('sync-error'); break;
+    default:        icon.textContent = '☁️'; text.textContent = '同期未設定'; break;
+  }
+}
+
+function setSyncModalState(state) {
+  const connectBtn    = document.getElementById('syncConnectBtn');
+  const disconnectBtn = document.getElementById('syncDisconnectBtn');
+  const loadBtn       = document.getElementById('syncLoadBtn');
+  const saveNowBtn    = document.getElementById('syncSaveNowBtn');
+  if (state === 'connected') {
+    connectBtn.style.display    = 'none';
+    disconnectBtn.style.display = '';
+    loadBtn.style.display       = '';
+    saveNowBtn.style.display    = '';
+  } else {
+    connectBtn.style.display    = '';
+    connectBtn.disabled         = false;
+    connectBtn.textContent      = '接続';
+    disconnectBtn.style.display = 'none';
+    loadBtn.style.display       = 'none';
+    saveNowBtn.style.display    = 'none';
+  }
+}
+
+function showSyncStatus(type, msg) {
+  const el = document.getElementById('syncStatusArea');
+  el.style.display    = 'block';
+  el.style.background = type === 'success' ? 'rgba(34,197,94,0.1)' : type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(79,110,247,0.08)';
+  el.style.borderLeft = `3px solid ${type === 'success' ? 'var(--green)' : type === 'error' ? 'var(--red)' : 'var(--accent)'}`;
+  el.style.color      = type === 'success' ? 'var(--green)' : type === 'error' ? 'var(--red)' : 'var(--text)';
+  el.textContent = msg;
+}
+
+function openSyncModal() {
+  document.getElementById('syncStatusArea').style.display = 'none';
+  if (syncCfg.pat && syncCfg.gistId) {
+    document.getElementById('syncPAT').value = '•'.repeat(20);
+    setSyncModalState('connected');
+    showSyncStatus('success', `☁️ クラウド同期が有効です\nGist ID: ${syncCfg.gistId.slice(0, 10)}...\n\nデータ変更時に自動的にクラウドへ保存されます。`);
+  } else {
+    document.getElementById('syncPAT').value = '';
+    setSyncModalState('disconnected');
+  }
+  document.getElementById('syncOverlay').classList.add('open');
+}
+
+function closeSyncModal(e) {
+  if (e && e.target !== document.getElementById('syncOverlay')) return;
+  document.getElementById('syncOverlay').classList.remove('open');
+}
+
 // ── Init ──────────────────────────────────────────────────────────
+loadSyncCfg();
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
-if (!raw.length) save();
+if (!raw.length) save(true);
 
 render();
 renderPieChart();
 checkAPI();  // バックグラウンドで接続テスト → 成功時に価格+履歴を自動取得
 
+// 起動時にGistからデータを読み込む（設定済みの場合）
+if (syncCfg.pat && syncCfg.gistId) {
+  updateSyncIcon('syncing');
+  setTimeout(() => gistLoad(true), 800);
+}
+
 // ── Persistence ───────────────────────────────────────────────────
-function save() {
+function save(skipSync = false) {
   localStorage.setItem('stocks', JSON.stringify(stocks));
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+  if (!skipSync) scheduleSyncSave();
 }
 
 // ── API 接続テスト ─────────────────────────────────────────────────
@@ -853,7 +1123,11 @@ function closeModal(e) {
   editId = null;
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { document.getElementById('overlay').classList.remove('open'); editId = null; }
+  if (e.key === 'Escape') {
+    document.getElementById('overlay').classList.remove('open');
+    document.getElementById('syncOverlay').classList.remove('open');
+    editId = null;
+  }
 });
 function onMarketChange() {
   const market = document.getElementById('fMarket').value;
