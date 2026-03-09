@@ -449,6 +449,11 @@
 const CORS_PROXY = 'https://corsproxy.io/?url=';
 const YF_CHART   = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 
+// 8桁英数字+.T → 日本の投資信託コード (サーバーAPI経由で取得)
+function isFundTicker(ticker) {
+  return /^[0-9A-Z]{8}\.T$/.test(ticker);
+}
+
 async function yhFetch(ticker, params = '') {
   const raw = `${YF_CHART}${encodeURIComponent(ticker)}${params}`;
   const res  = await fetch(CORS_PROXY + encodeURIComponent(raw), {
@@ -463,7 +468,19 @@ async function yhFetch(ticker, params = '') {
   return result;
 }
 
+async function getCurrentPriceFund(ticker) {
+  const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`サーバーエラー HTTP ${res.status}`);
+  const data = await res.json();
+  const d = data[ticker];
+  if (!d || d.error || !d.price) throw new Error(d?.error || '価格データなし');
+  return { price: d.price, prev_close: d.prev_close, currency: d.currency || 'JPY' };
+}
+
 async function getCurrentPrice(ticker) {
+  if (isFundTicker(ticker)) return await getCurrentPriceFund(ticker);
   const r    = await yhFetch(ticker, '?interval=1d&range=2d');
   const meta = r.meta;
   const price = meta.regularMarketPrice ?? meta.postMarketPrice;
@@ -475,7 +492,17 @@ async function getCurrentPrice(ticker) {
   };
 }
 
+async function getHistoryFund(ticker, period) {
+  const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data[ticker] || [];
+}
+
 async function getHistory(ticker, period) {
+  if (isFundTicker(ticker)) return await getHistoryFund(ticker, period);
   const r          = await yhFetch(ticker, `?interval=1d&range=${period}`);
   const timestamps = r.timestamp || [];
   const closes     = r.indicators?.quote?.[0]?.close || [];
@@ -874,9 +901,6 @@ async function fetchAllPrices() {
     if (d?.price) {
       updated++;
       return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? s.prevClose, currency: d.currency || s.currency, lastFetched: now, fetchError: null };
-    } else if (s.market === 'FUND') {
-      // 投資信託は Yahoo Finance 非対応 → エラー扱いせず手動更新を促す
-      return { ...s, fetchError: null }; // 既存価格を維持
     } else {
       failed++;
       return { ...s, lastFetched: now, fetchError: '取得失敗' };
@@ -1126,12 +1150,10 @@ function render() {
     const dayChg = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
     const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : 'badge-fund';
     const unit   = s.market === 'FUND' ? '万口' : '株';
-    const fetchIcon = s.market === 'FUND'
-      ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px" title="投資信託は手動更新">手動</span>`
-      : s.lastFetched
-        ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
-                        : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
-        : '';
+    const fetchIcon = s.lastFetched
+      ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
+                      : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
+      : '';
     return `<tr>
       <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${s.market==='FUND'?'投信':s.market}</span></div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
