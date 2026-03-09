@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>株式ポートフォリオ管理</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --surface2: #242736; --border: #2e3148;
+      --text: #e8eaf0; --text-muted: #8b90a8;
+      --accent: #4f6ef7; --accent-hover: #6b85ff;
+      --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+
+    /* ── Header ── */
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 13px 24px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 17px; font-weight: 700; flex: 1; }
+    .api-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); background: var(--surface2); padding: 4px 10px; border-radius: 20px; white-space: nowrap; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); transition: background 0.4s; }
+    .last-updated { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Container ── */
+    .container { max-width: 1400px; margin: 0 auto; padding: 22px; }
+
+    /* ── Rate bar ── */
+    .rate-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-bottom: 16px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    .rate-value { color: var(--text); font-weight: 700; font-size: 14px; }
+    .rate-time  { color: var(--text-muted); }
+    .rate-bar .sep { color: var(--border); }
+    .btn-auto-rate { margin-left: auto; background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.15s; font-weight: 600; }
+    .btn-auto-rate.active { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.08); }
+
+    /* ── Summary ── */
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 17px 19px; }
+    .card-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .card-value { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    .card-value.green { color: var(--green); }
+    .card-value.red   { color: var(--red); }
+    .card-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── Charts ── */
+    .charts-section { display: grid; grid-template-columns: 300px 1fr; gap: 14px; margin-bottom: 16px; }
+    .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+    .chart-title { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .chart-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 220px; color: var(--text-muted); font-size: 12px; gap: 6px; text-align: center; }
+    .chart-placeholder span:first-child { font-size: 22px; }
+    .period-btns { display: flex; gap: 4px; }
+    .period-btn { background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.13s; }
+    .period-btn:hover  { border-color: var(--accent); color: var(--accent); }
+    .period-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .period-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .pie-legend { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; max-height: 130px; overflow-y: auto; }
+    .pie-legend-item { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-muted); }
+    .pie-dot  { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+    .pie-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pie-pct  { font-weight: 700; color: var(--text); }
+    .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
+    .line-stat  { font-size: 12px; color: var(--text-muted); }
+    .line-stat strong { color: var(--text); font-size: 14px; font-weight: 700; }
+
+    /* ── Toolbar ── */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; gap: 10px; flex-wrap: wrap; }
+    .toolbar-left { display: flex; gap: 8px; align-items: center; }
+    input[type="text"], input[type="number"], select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; transition: border-color 0.15s; }
+    input:focus, select:focus { border-color: var(--accent); }
+    .search { width: 190px; }
+    button { border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-ghost { background: var(--surface2); color: var(--text-muted); }
+    .btn-ghost:hover { color: var(--text); background: var(--border); }
+    .btn-fetch { background: var(--surface2); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+    .btn-fetch:hover:not(:disabled) { background: rgba(34,197,94,0.1); }
+    .btn-fetch:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-danger { background: transparent; color: var(--red); padding: 4px 8px; font-size: 12px; }
+    .btn-danger:hover { background: rgba(239,68,68,0.1); }
+    .btn-edit   { background: transparent; color: var(--accent); padding: 4px 8px; font-size: 12px; }
+    .btn-edit:hover { background: rgba(79,110,247,0.1); }
+
+    /* ── Table ── */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { background: var(--surface2); }
+    th { text-align: left; padding: 11px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; cursor: pointer; white-space: nowrap; user-select: none; }
+    th:hover { color: var(--text); }
+    th.active { color: var(--accent); }
+    td { padding: 13px 14px; border-top: 1px solid var(--border); white-space: nowrap; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .ticker      { font-weight: 700; font-size: 14px; }
+    .ticker-name { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: 4px; }
+    .badge-jp   { background: rgba(79,110,247,0.2);  color: var(--accent); }
+    .badge-us   { background: rgba(245,158,11,0.2);  color: var(--yellow); }
+    .badge-fund { background: rgba(34,197,94,0.2);   color: var(--green); }
+    .profit  { color: var(--green); font-weight: 600; }
+    .loss    { color: var(--red);   font-weight: 600; }
+    .neutral { color: var(--text-muted); }
+    .fetch-ok  { font-size: 11px; color: var(--green);  margin-left: 4px; }
+    .fetch-err { font-size: 11px; color: var(--yellow); margin-left: 4px; cursor: help; }
+    .actions { display: flex; gap: 4px; }
+    .empty { text-align: center; padding: 56px 20px; color: var(--text-muted); }
+    .empty-icon { font-size: 38px; margin-bottom: 10px; }
+
+    /* ── Modal ── */
+    .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; align-items: center; justify-content: center; }
+    .overlay.open { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; width: 500px; max-width: 95vw; }
+    .modal h2 { font-size: 15px; margin-bottom: 18px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-group.full { grid-column: span 2; }
+    .form-group label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .form-group input, .form-group select { width: 100%; }
+    .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .fund-note { grid-column: span 2; background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.2); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--green); display: none; }
+    .fund-note.visible { display: block; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+    /* ── Toast ── */
+    .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { border-color: var(--green); }
+    .toast.error   { border-color: var(--red); }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) { .charts-section { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) {
+      .container { padding: 12px; }
+      .summary { grid-template-columns: 1fr 1fr; }
+      td:nth-child(4), th:nth-child(4), td:nth-child(5), th:nth-child(5) { display: none; }
+      .form-grid { grid-template-columns: 1fr; }
+      .form-group.full, .fund-note { grid-column: span 1; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+  </svg>
+  <h1>株式ポートフォリオ管理</h1>
+  <div class="api-status">
+    <div class="status-dot" id="apiDot"></div>
+    <span id="apiLabel">確認中...</span>
+  </div>
+  <span class="last-updated" id="lastUpdated"></span>
+</header>
+
+<div class="container">
+
+  <!-- Rate bar -->
+  <div class="rate-bar">
+    <span>💱 USD/JPY</span>
+    <span class="rate-value" id="rateValue">—</span>
+    <span class="rate-time" id="rateTime"></span>
+    <span class="sep">|</span>
+    <span style="font-size:11px">60秒ごとに自動更新</span>
+    <button class="btn-auto-rate" id="autoRateBtn" onclick="toggleAutoRate()">
+      🔄 為替自動更新 OFF
+    </button>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary">
+    <div class="card">
+      <div class="card-label">総資産評価額 (円換算)</div>
+      <div class="card-value" id="totalValue">¥0</div>
+      <div class="card-sub" id="totalCost">取得総額: ¥0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">含み損益</div>
+      <div class="card-value neutral" id="totalPL">¥0</div>
+      <div class="card-sub" id="totalPLPct">0.00%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">保有銘柄数</div>
+      <div class="card-value" id="stockCount">0</div>
+      <div class="card-sub" id="marketBreak">-</div>
+    </div>
+    <div class="card">
+      <div class="card-label">本日損益 (円換算)</div>
+      <div class="card-value neutral" id="dayPL">¥0</div>
+      <div class="card-sub" id="dayPLPct">0.00%</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-section">
+    <div class="chart-card">
+      <div class="chart-header">
+        <span class="chart-title">銘柄別配分</span>
+      </div>
+      <div style="height:180px">
+        <canvas id="pieCanvas"></canvas>
+      </div>
+      <div class="pie-legend" id="pieLegend"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <span class="chart-title">ポートフォリオ推移</span>
+        <div class="period-btns">
+          <button class="period-btn" data-period="5d"  onclick="fetchHistory('5d')">1週</button>
+          <button class="period-btn active" data-period="1mo" onclick="fetchHistory('1mo')">1ヶ月</button>
+          <button class="period-btn" data-period="3mo" onclick="fetchHistory('3mo')">3ヶ月</button>
+          <button class="period-btn" data-period="6mo" onclick="fetchHistory('6mo')">6ヶ月</button>
+          <button class="period-btn" data-period="1y"  onclick="fetchHistory('1y')">1年</button>
+        </div>
+      </div>
+      <div class="line-stats" id="lineStats" style="display:none">
+        <div class="line-stat">期間損益: <strong id="linePL">—</strong></div>
+        <div class="line-stat">期間変化率: <strong id="linePLPct">—</strong></div>
+      </div>
+      <div style="height:220px; position:relative">
+        <canvas id="lineCanvas" style="display:none"></canvas>
+        <div class="chart-placeholder" id="linePlaceholder">
+          <span>📈</span>
+          <span>「価格を自動取得」を押すと<br>推移グラフが表示されます</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <input type="text" class="search" id="searchInput" placeholder="銘柄を検索...">
+      <select id="marketFilter">
+        <option value="">全市場</option>
+        <option value="JP">日本株</option>
+        <option value="US">米国株</option>
+        <option value="FUND">投資信託</option>
+      </select>
+    </div>
+    <div class="toolbar-left">
+      <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
+      <button class="btn-primary" onclick="openModal()">+ 銘柄追加</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortBy('ticker')">銘柄 <span id="sort-ticker">↕</span></th>
+          <th onclick="sortBy('quantity')">保有数 <span id="sort-quantity">↕</span></th>
+          <th onclick="sortBy('avgPrice')">取得価格 <span id="sort-avgPrice">↕</span></th>
+          <th onclick="sortBy('currentPrice')">現在価格 <span id="sort-currentPrice">↕</span></th>
+          <th onclick="sortBy('value')">評価額 <span id="sort-value">↕</span></th>
+          <th onclick="sortBy('pl')">含み損益 <span id="sort-pl">↕</span></th>
+          <th onclick="sortBy('plPct')">損益率 <span id="sort-plPct">↕</span></th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<!-- Modal -->
+<div class="overlay" id="overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <h2 id="modalTitle">銘柄を追加</h2>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>市場</label>
+        <select id="fMarket" onchange="onMarketChange()">
+          <option value="JP">日本株 (JPY)</option>
+          <option value="US">米国株 (USD)</option>
+          <option value="FUND">投資信託 (JPY)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>ティッカー / 銘柄コード *</label>
+        <input type="text" id="fTicker" placeholder="例: 7203" oninput="onTickerInput()">
+        <span class="form-hint" id="tickerHint">証券コード4桁 (日本株)</span>
+      </div>
+      <div class="fund-note" id="fundNote">
+        💡 <strong>投資信託:</strong> ファンドコード(8桁英数字)を入力。口数は万口単位、価格は基準価額(円/万口)で入力。
+      </div>
+      <div class="form-group full">
+        <label>銘柄名 *</label>
+        <input type="text" id="fName" placeholder="例: トヨタ自動車">
+      </div>
+      <div class="form-group">
+        <label>セクター</label>
+        <input type="text" id="fSector" placeholder="例: 自動車">
+      </div>
+      <div class="form-group">
+        <label>Yahooティッカー (自動)</label>
+        <input type="text" id="fYahoo" placeholder="7203.T" style="color:var(--text-muted)" readonly>
+      </div>
+      <div class="form-group">
+        <label id="qtyLabel">保有数量 (株) *</label>
+        <input type="number" id="fQty" placeholder="100" min="0" step="1">
+      </div>
+      <div class="form-group">
+        <label id="avgLabel">平均取得価格 *</label>
+        <input type="number" id="fAvg" placeholder="2500" min="0" step="0.01">
+      </div>
+      <div class="form-group">
+        <label>現在価格</label>
+        <input type="number" id="fCurrent" placeholder="取得価格と同じ" min="0" step="0.01">
+      </div>
+      <div class="form-group">
+        <label>前日終値</label>
+        <input type="number" id="fPrev" placeholder="任意" min="0" step="0.01">
+      </div>
+      <div class="form-group full">
+        <label>メモ</label>
+        <input type="text" id="fNote" placeholder="自由記述">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal()">キャンセル</button>
+      <button class="btn-primary" onclick="saveStock()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── API (Yahoo Finance via CORS proxy) ────────────────────────────
+const CORS_PROXY = 'https://corsproxy.io/?url=';
+const YF_CHART   = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+
+async function yhFetch(ticker, params = '') {
+  const raw = `${YF_CHART}${encodeURIComponent(ticker)}${params}`;
+  const res  = await fetch(CORS_PROXY + encodeURIComponent(raw), {
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  const err  = json.chart?.error?.description;
+  if (err) throw new Error(err);
+  const result = json.chart?.result?.[0];
+  if (!result) throw new Error('データなし');
+  return result;
+}
+
+async function getCurrentPrice(ticker) {
+  const r    = await yhFetch(ticker, '?interval=1d&range=2d');
+  const meta = r.meta;
+  const price = meta.regularMarketPrice ?? meta.postMarketPrice;
+  if (!price) throw new Error('価格データなし');
+  return {
+    price:      price,
+    prev_close: meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? null,
+    currency:   meta.currency || 'JPY',
+  };
+}
+
+async function getHistory(ticker, period) {
+  const r          = await yhFetch(ticker, `?interval=1d&range=${period}`);
+  const timestamps = r.timestamp || [];
+  const closes     = r.indicators?.quote?.[0]?.close || [];
+  return timestamps
+    .map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
+    .filter(d => d.close != null && !isNaN(d.close));
+}
+
+// ── Constants ─────────────────────────────────────────────────────
+const COLORS = [
+  '#4f6ef7','#22c55e','#f59e0b','#ef4444','#a855f7',
+  '#06b6d4','#f97316','#ec4899','#84cc16','#14b8a6',
+  '#8b5cf6','#64748b',
+];
+
+// ── State ─────────────────────────────────────────────────────────
+let stocks        = [];
+let usdJpyRate    = 150;
+let apiOnline     = false;
+let isFetching    = false;
+let editId        = null;
+let sortKey       = 'value';
+let sortDir       = -1;
+let filterText    = '';
+let filterMarket  = '';
+
+let autoRateEnabled  = false;
+let autoRateInterval = null;
+let currentPeriod    = '1mo';
+let historyData      = null;
+let pieChart         = null;
+let lineChart        = null;
+
+// ── Helpers ───────────────────────────────────────────────────────
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+function getYahooTicker(ticker, market) {
+  const t = (ticker || '').trim().toUpperCase();
+  return market === 'US' ? t : t + '.T';
+}
+function getCurrency(market) { return market === 'US' ? 'USD' : 'JPY'; }
+function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
+
+function fmtPrice(p, cur) {
+  if (p == null) return '—';
+  if (cur === 'USD') return '$' + Math.abs(p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '¥' + Math.abs(p).toLocaleString('ja-JP', { maximumFractionDigits: p < 100 ? 2 : 0 });
+}
+function fmtJPY(n)       { return '¥' + Math.round(Math.abs(n)).toLocaleString('ja-JP'); }
+function fmtPL(pl, cur)  { return (pl >= 0 ? '+' : '-') + fmtPrice(Math.abs(pl), cur); }
+function pctStr(p)        { return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; }
+function plClass(n)       { return n > 0 ? 'profit' : n < 0 ? 'loss' : 'neutral'; }
+function esc(s)           { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Migration ─────────────────────────────────────────────────────
+function migrateStock(s) {
+  if (!s.yahooTicker)        s.yahooTicker = getYahooTicker(s.ticker, s.market || 'JP');
+  if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
+  if (!('lastFetched' in s)) s.lastFetched = null;
+  if (!('fetchError'  in s)) s.fetchError  = null;
+  return s;
+}
+
+// ── Default data ──────────────────────────────────────────────────
+function defaultStocks() {
+  return [
+    { id: uid(), ticker:'7203',     yahooTicker:'7203.T',     name:'トヨタ自動車',           market:'JP',   sector:'自動車',             currency:'JPY', quantity:100, avgPrice:2850,  currentPrice:3120,  prevClose:3090,  note:'',        lastFetched:null, fetchError:null },
+    { id: uid(), ticker:'9984',     yahooTicker:'9984.T',     name:'ソフトバンクG',          market:'JP',   sector:'IT',                 currency:'JPY', quantity:200, avgPrice:7200,  currentPrice:8450,  prevClose:8300,  note:'',        lastFetched:null, fetchError:null },
+    { id: uid(), ticker:'AAPL',     yahooTicker:'AAPL',       name:'Apple Inc.',             market:'US',   sector:'テクノロジー',        currency:'USD', quantity:30,  avgPrice:175,   currentPrice:185.5, prevClose:183.2, note:'',        lastFetched:null, fetchError:null },
+    { id: uid(), ticker:'NVDA',     yahooTicker:'NVDA',       name:'NVIDIA Corp.',           market:'US',   sector:'半導体',              currency:'USD', quantity:20,  avgPrice:430,   currentPrice:875,   prevClose:860,   note:'',        lastFetched:null, fetchError:null },
+    { id: uid(), ticker:'0131103C', yahooTicker:'0131103C.T', name:'eMAXIS Slim 全世界株式', market:'FUND', sector:'インデックスファンド', currency:'JPY', quantity:100, avgPrice:18000, currentPrice:22000, prevClose:21800, note:'100万口', lastFetched:null, fetchError:null },
+  ];
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
+stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
+if (!raw.length) save();
+
+render();
+renderPieChart();
+checkAPI();  // バックグラウンドで接続テスト → 成功時に価格+履歴を自動取得
+
+// ── Persistence ───────────────────────────────────────────────────
+function save() {
+  localStorage.setItem('stocks', JSON.stringify(stocks));
+  document.getElementById('lastUpdated').textContent =
+    '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+}
+
+// ── API 接続テスト ─────────────────────────────────────────────────
+async function checkAPI() {
+  const dot   = document.getElementById('apiDot');
+  const label = document.getElementById('apiLabel');
+  dot.style.background = 'var(--yellow)';
+  label.textContent    = '確認中...';
+  try {
+    await getCurrentPrice('AAPL');
+    apiOnline = true;
+    dot.style.background = 'var(--green)';
+    label.textContent    = 'Yahoo Finance ✓';
+    // 初回接続時に自動取得
+    fetchAllPrices();
+  } catch (e) {
+    apiOnline = false;
+    dot.style.background = 'var(--red)';
+    label.textContent    = 'API接続エラー';
+  }
+}
+
+// ── 為替自動更新 ───────────────────────────────────────────────────
+function toggleAutoRate() {
+  autoRateEnabled = !autoRateEnabled;
+  const btn = document.getElementById('autoRateBtn');
+  if (autoRateEnabled) {
+    btn.textContent = '🔄 為替自動更新 ON';
+    btn.classList.add('active');
+    fetchRate();
+    autoRateInterval = setInterval(fetchRate, 60000);
+  } else {
+    btn.textContent = '🔄 為替自動更新 OFF';
+    btn.classList.remove('active');
+    clearInterval(autoRateInterval);
+    autoRateInterval = null;
+  }
+}
+
+async function fetchRate() {
+  try {
+    const d = await getCurrentPrice('USDJPY=X');
+    usdJpyRate = d.price;
+    document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
+    document.getElementById('rateTime').textContent  =
+      '更新: ' + new Date().toLocaleTimeString('ja-JP');
+    render();
+    if (historyData) renderLineChart();
+  } catch (e) {
+    console.warn('USDJPY fetch:', e.message);
+  }
+}
+
+// ── 全銘柄 価格取得 ────────────────────────────────────────────────
+async function fetchAllPrices() {
+  if (isFetching) return;
+  isFetching = true;
+  const btn = document.getElementById('fetchBtn');
+  btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
+  btn.disabled  = true;
+
+  // 全銘柄 + USDJPY を並列取得
+  const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
+  const results    = await Promise.allSettled(
+    allTickers.map(t => getCurrentPrice(t).then(d => ({ ticker: t, ...d })))
+  );
+
+  const priceMap = {};
+  results.forEach(r => {
+    if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
+  });
+
+  // USDJPY 更新
+  if (priceMap['USDJPY=X']) {
+    usdJpyRate = priceMap['USDJPY=X'].price;
+    document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
+    document.getElementById('rateTime').textContent  =
+      '更新: ' + new Date().toLocaleTimeString('ja-JP');
+  }
+
+  let updated = 0, failed = 0;
+  const now = new Date().toISOString();
+  stocks = stocks.map(s => {
+    const d = priceMap[s.yahooTicker];
+    if (d?.price) {
+      updated++;
+      return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? s.prevClose, currency: d.currency || s.currency, lastFetched: now, fetchError: null };
+    } else if (s.market === 'FUND') {
+      // 投資信託は Yahoo Finance 非対応 → エラー扱いせず手動更新を促す
+      return { ...s, fetchError: null }; // 既存価格を維持
+    } else {
+      failed++;
+      return { ...s, lastFetched: now, fetchError: '取得失敗' };
+    }
+  });
+
+  // API ステータス更新
+  const dot = document.getElementById('apiDot');
+  if (updated > 0) {
+    apiOnline = true;
+    dot.style.background = 'var(--green)';
+    document.getElementById('apiLabel').textContent = 'Yahoo Finance ✓';
+  } else {
+    apiOnline = false;
+    dot.style.background = 'var(--red)';
+    document.getElementById('apiLabel').textContent = 'API接続エラー';
+  }
+
+  save();
+  render();
+  renderPieChart();
+  fetchHistory(currentPeriod);
+
+  toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
+        failed > 0 ? 'error' : 'success');
+
+  isFetching = false;
+  btn.innerHTML = '📡 価格を自動取得';
+  btn.disabled  = false;
+}
+
+// ── 履歴取得 ──────────────────────────────────────────────────────
+async function fetchHistory(period) {
+  currentPeriod = period;
+  document.querySelectorAll('.period-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.period === period);
+    b.disabled = true;
+  });
+
+  const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
+  const results    = await Promise.allSettled(
+    allTickers.map(t => getHistory(t, period).then(d => ({ [t]: d })))
+  );
+
+  historyData = Object.assign({}, ...results.filter(r => r.status === 'fulfilled').map(r => r.value));
+  renderLineChart();
+
+  document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
+}
+
+// ── 推移グラフ ─────────────────────────────────────────────────────
+function renderLineChart() {
+  if (!historyData) return;
+
+  const usdJpyMap = {};
+  (historyData['USDJPY=X'] || []).forEach(d => usdJpyMap[d.date] = d.close);
+
+  const dateSet = new Set();
+  stocks.forEach(s => (historyData[s.yahooTicker] || []).forEach(d => dateSet.add(d.date)));
+  const dates = [...dateSet].sort();
+  if (!dates.length) return;
+
+  function getLastKnown(arr, target) {
+    let last = null;
+    for (const item of arr) { if (item.date <= target) last = item.close; else break; }
+    return last;
+  }
+
+  const points = dates.map(date => {
+    let total = 0;
+    for (const s of stocks) {
+      const price = getLastKnown(historyData[s.yahooTicker] || [], date);
+      if (price == null) continue;
+      const rate = usdJpyMap[date] || usdJpyRate;
+      total += s.currency === 'USD' ? price * s.quantity * rate : price * s.quantity;
+    }
+    return { date, value: total > 0 ? Math.round(total) : null };
+  }).filter(p => p.value);
+
+  if (!points.length) return;
+
+  const first = points[0].value, last = points[points.length - 1].value;
+  const diff  = last - first;
+  const pct   = diff / first * 100;
+  const color = diff >= 0 ? '#22c55e' : '#ef4444';
+
+  document.getElementById('lineStats').style.display = 'flex';
+  const plEl  = document.getElementById('linePL');
+  plEl.textContent = (diff >= 0 ? '+' : '-') + fmtJPY(diff);
+  plEl.style.color = color;
+  const pctEl = document.getElementById('linePLPct');
+  pctEl.textContent = pctStr(pct);
+  pctEl.style.color = color;
+
+  const labels = points.map(p => {
+    const [y, m, d] = p.date.split('-');
+    return ['1y','2y','5y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
+  });
+
+  if (lineChart) lineChart.destroy();
+
+  const canvas = document.getElementById('lineCanvas');
+  canvas.style.display = 'block';
+  document.getElementById('linePlaceholder').style.display = 'none';
+
+  lineChart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: points.map(p => p.value),
+        borderColor: color,
+        backgroundColor: color + '18',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: color,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1d27', borderColor: '#2e3148', borderWidth: 1,
+          titleColor: '#8b90a8', bodyColor: '#e8eaf0',
+          callbacks: { label: ctx => ` ¥${ctx.raw.toLocaleString('ja-JP')}` },
+        },
+      },
+      scales: {
+        x: { grid: { color: '#2e314840' }, ticks: { color: '#8b90a8', maxTicksLimit: 7, font: { size: 11 } } },
+        y: {
+          grid: { color: '#2e314840' },
+          ticks: {
+            color: '#8b90a8', font: { size: 11 },
+            callback: v => v >= 100000000 ? '¥'+(v/100000000).toFixed(1)+'億'
+                        : v >= 10000     ? '¥'+(v/10000).toFixed(0)+'万'
+                        : '¥'+v.toLocaleString('ja-JP'),
+          },
+        },
+      },
+    },
+  });
+}
+
+// ── 円グラフ ──────────────────────────────────────────────────────
+function renderPieChart() {
+  if (!stocks.length) return;
+
+  const data  = stocks
+    .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
+    .sort((a, b) => b.value - a.value);
+  const total  = data.reduce((s, d) => s + d.value, 0);
+  const colors = COLORS.slice(0, data.length);
+
+  if (pieChart) pieChart.destroy();
+  pieChart = new Chart(document.getElementById('pieCanvas').getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: data.map(d => d.ticker),
+      datasets: [{ data: data.map(d => d.value), backgroundColor: colors, borderColor: '#1a1d27', borderWidth: 2, hoverOffset: 6 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '62%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1d27', borderColor: '#2e3148', borderWidth: 1,
+          titleColor: '#8b90a8', bodyColor: '#e8eaf0',
+          callbacks: { label: ctx => ` ¥${Math.round(ctx.raw).toLocaleString('ja-JP')} (${(ctx.raw/total*100).toFixed(1)}%)` },
+        },
+      },
+    },
+  });
+
+  document.getElementById('pieLegend').innerHTML = data.map((d, i) => `
+    <div class="pie-legend-item">
+      <div class="pie-dot" style="background:${colors[i]}"></div>
+      <span class="pie-name" title="${esc(d.name)}">${esc(d.ticker)} ${esc(d.name)}</span>
+      <span class="pie-pct">${(d.value/total*100).toFixed(1)}%</span>
+    </div>`).join('');
+}
+
+// ── テーブル & サマリー ────────────────────────────────────────────
+function render() {
+  let list = stocks.filter(s => {
+    const q = filterText.toLowerCase();
+    return (!q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (s.sector||'').toLowerCase().includes(q))
+        && (!filterMarket || s.market === filterMarket);
+  });
+
+  list.sort((a, b) => {
+    let va, vb;
+    switch (sortKey) {
+      case 'ticker':       va = a.ticker; vb = b.ticker; break;
+      case 'quantity':     va = a.quantity; vb = b.quantity; break;
+      case 'avgPrice':     va = toJPY(a.avgPrice,     a.currency); vb = toJPY(b.avgPrice,     b.currency); break;
+      case 'currentPrice': va = toJPY(a.currentPrice, a.currency); vb = toJPY(b.currentPrice, b.currency); break;
+      case 'value':        va = toJPY(a.currentPrice * a.quantity, a.currency); vb = toJPY(b.currentPrice * b.quantity, b.currency); break;
+      case 'pl':           va = toJPY((a.currentPrice-a.avgPrice)*a.quantity, a.currency); vb = toJPY((b.currentPrice-b.avgPrice)*b.quantity, b.currency); break;
+      case 'plPct':        va = (a.currentPrice-a.avgPrice)/a.avgPrice; vb = (b.currentPrice-b.avgPrice)/b.avgPrice; break;
+      default:             va = 0; vb = 0;
+    }
+    return typeof va === 'string' ? sortDir * va.localeCompare(vb) : sortDir * (va - vb);
+  });
+
+  // サマリー集計
+  let totalValueJPY = 0, totalCostJPY = 0, dayPLJPY = 0;
+  const markets = { JP: 0, US: 0, FUND: 0 };
+  stocks.forEach(s => {
+    totalValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
+    totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
+    dayPLJPY      += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
+    markets[s.market] = (markets[s.market] || 0) + 1;
+  });
+  const totalPL    = totalValueJPY - totalCostJPY;
+  const totalPLPct = totalCostJPY  ? totalPL  / totalCostJPY  * 100 : 0;
+  const dayPLPct   = totalValueJPY ? dayPLJPY / (totalValueJPY - dayPLJPY) * 100 : 0;
+
+  document.getElementById('totalValue').textContent  = fmtJPY(totalValueJPY);
+  document.getElementById('totalCost').textContent   = '取得総額: ' + fmtJPY(totalCostJPY);
+  const plEl = document.getElementById('totalPL');
+  plEl.textContent = (totalPL >= 0 ? '+' : '-') + fmtJPY(totalPL);
+  plEl.className   = 'card-value ' + plClass(totalPL);
+  document.getElementById('totalPLPct').textContent  = pctStr(totalPLPct);
+  document.getElementById('stockCount').textContent  = stocks.length;
+  document.getElementById('marketBreak').textContent = `日本株 ${markets.JP||0} | 米国株 ${markets.US||0} | 投信 ${markets.FUND||0}`;
+  const dayEl = document.getElementById('dayPL');
+  dayEl.textContent = (dayPLJPY >= 0 ? '+' : '-') + fmtJPY(dayPLJPY);
+  dayEl.className   = 'card-value ' + plClass(dayPLJPY);
+  document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
+
+  // テーブル行
+  const tbody = document.getElementById('tableBody');
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-icon">📊</div><div>銘柄が見つかりません</div></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(s => {
+    const value  = s.currentPrice * s.quantity;
+    const pl     = value - s.avgPrice * s.quantity;
+    const plPct  = s.avgPrice ? pl / (s.avgPrice * s.quantity) * 100 : 0;
+    const dayChg = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
+    const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : 'badge-fund';
+    const unit   = s.market === 'FUND' ? '万口' : '株';
+    const fetchIcon = s.market === 'FUND'
+      ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px" title="投資信託は手動更新">手動</span>`
+      : s.lastFetched
+        ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
+                        : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
+        : '';
+    return `<tr>
+      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${s.market==='FUND'?'投信':s.market}</span></div>
+          <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
+      <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
+      <td>${fmtPrice(s.avgPrice, s.currency)}</td>
+      <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}</td>
+      <td>${fmtPrice(value, s.currency)}</td>
+      <td class="${plClass(pl)}">${fmtPL(pl, s.currency)}</td>
+      <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
+      <td><div class="actions">
+        <button class="btn-edit"   onclick="editStock('${s.id}')">編集</button>
+        <button class="btn-danger" onclick="deleteStock('${s.id}')">削除</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  ['ticker','quantity','avgPrice','currentPrice','value','pl','plPct'].forEach(k => {
+    const el = document.getElementById('sort-'+k);
+    if (el) el.textContent = sortKey === k ? (sortDir > 0 ? '↑' : '↓') : '↕';
+  });
+}
+
+// ── ソート / フィルター ────────────────────────────────────────────
+function sortBy(key) {
+  if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+  render();
+}
+document.getElementById('searchInput').addEventListener('input',   e => { filterText   = e.target.value; render(); });
+document.getElementById('marketFilter').addEventListener('change', e => { filterMarket = e.target.value; render(); });
+
+// ── モーダル ──────────────────────────────────────────────────────
+function openModal(id = null) {
+  editId = id;
+  const s = id ? stocks.find(x => x.id === id) : null;
+  document.getElementById('modalTitle').textContent = id ? '銘柄を編集' : '銘柄を追加';
+  document.getElementById('fMarket').value  = s?.market   || 'JP';
+  document.getElementById('fTicker').value  = s?.ticker   || '';
+  document.getElementById('fName').value    = s?.name     || '';
+  document.getElementById('fSector').value  = s?.sector   || '';
+  document.getElementById('fQty').value     = s?.quantity || '';
+  document.getElementById('fAvg').value     = s?.avgPrice || '';
+  document.getElementById('fCurrent').value = s?.currentPrice || '';
+  document.getElementById('fPrev').value    = s?.prevClose    || '';
+  document.getElementById('fNote').value    = s?.note || '';
+  onMarketChange();
+  if (s) document.getElementById('fYahoo').value = s.yahooTicker || '';
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('fTicker').focus();
+}
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('overlay')) return;
+  document.getElementById('overlay').classList.remove('open');
+  editId = null;
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { document.getElementById('overlay').classList.remove('open'); editId = null; }
+});
+function onMarketChange() {
+  const market = document.getElementById('fMarket').value;
+  const cur    = getCurrency(market);
+  const hints  = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁 (例: 0131103C)' };
+  document.getElementById('tickerHint').textContent = hints[market] || '';
+  document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 (万口単位) *' : '保有数量 (株) *';
+  document.getElementById('avgLabel').textContent   = market === 'FUND' ? '基準価額 (円/万口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
+  document.getElementById('fundNote').classList.toggle('visible', market === 'FUND');
+  const t = document.getElementById('fTicker').value;
+  if (t) document.getElementById('fYahoo').value = getYahooTicker(t, market);
+}
+function onTickerInput() {
+  const market = document.getElementById('fMarket').value;
+  const ticker = document.getElementById('fTicker').value;
+  document.getElementById('fYahoo').value = ticker ? getYahooTicker(ticker, market) : '';
+}
+function saveStock() {
+  const market  = document.getElementById('fMarket').value;
+  const ticker  = document.getElementById('fTicker').value.trim().toUpperCase();
+  const name    = document.getElementById('fName').value.trim();
+  const sector  = document.getElementById('fSector').value.trim();
+  const qty     = parseFloat(document.getElementById('fQty').value);
+  const avg     = parseFloat(document.getElementById('fAvg').value);
+  const current = parseFloat(document.getElementById('fCurrent').value) || avg;
+  const prev    = parseFloat(document.getElementById('fPrev').value)    || null;
+  const note    = document.getElementById('fNote').value.trim();
+
+  if (!ticker || !name || isNaN(qty) || isNaN(avg)) { toast('必須項目を入力してください', 'error'); return; }
+  if (qty <= 0 || avg <= 0) { toast('数量と価格は正の値を入力してください', 'error'); return; }
+
+  const yahooTicker = getYahooTicker(ticker, market);
+  const currency    = getCurrency(market);
+
+  if (editId) {
+    const idx = stocks.findIndex(s => s.id === editId);
+    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: current, prevClose: prev, note };
+    toast('銘柄を更新しました', 'success');
+  } else {
+    if (stocks.find(s => s.ticker === ticker && s.market === market)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: current, prevClose: prev, note, lastFetched: null, fetchError: null });
+    toast(`${ticker} を追加しました`, 'success');
+  }
+
+  save(); render(); renderPieChart();
+  document.getElementById('overlay').classList.remove('open');
+  editId = null;
+}
+function editStock(id)   { openModal(id); }
+function deleteStock(id) {
+  const s = stocks.find(x => x.id === id);
+  if (!confirm(`「${s.ticker} ${s.name}」を削除しますか？`)) return;
+  stocks = stocks.filter(x => x.id !== id);
+  save(); render(); renderPieChart();
+  toast(`${s.ticker} を削除しました`);
+}
+
+// ── トースト ──────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = 'toast ' + type + ' show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
