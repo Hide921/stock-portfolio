@@ -133,6 +133,28 @@
     .fund-note.visible { display: block; }
     .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
 
+    /* ── Import Modal ── */
+    .import-modal { width: 680px; }
+    .import-instructions { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.7; }
+    .import-instructions kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
+    .import-format-hint { background: rgba(79,110,247,0.08); border: 1px solid rgba(79,110,247,0.2); border-radius: 8px; padding: 10px 14px; font-size: 12px; margin-bottom: 14px; line-height: 1.6; }
+    .import-textarea { width: 100%; height: 180px; resize: vertical; font-family: monospace; font-size: 12px; background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .import-textarea:focus { outline: none; border-color: var(--accent); }
+    .import-col-map { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 4px; }
+    .col-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 11px; border: 1px solid var(--border); }
+    .col-tag.found    { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.07); }
+    .col-tag.missing  { border-color: var(--red);   color: var(--red);   background: rgba(239,68,68,0.07); }
+    .col-tag.optional { border-color: var(--text-muted); color: var(--text-muted); }
+    .import-summary { font-size: 13px; margin-bottom: 8px; color: var(--text-muted); }
+    .import-summary strong { color: var(--text); }
+    .import-preview-wrap { overflow: auto; max-height: 260px; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; }
+    .import-preview-wrap table { width: 100%; font-size: 12px; border-collapse: collapse; }
+    .import-preview-wrap th { background: var(--surface2); padding: 8px 10px; text-align: left; white-space: nowrap; position: sticky; top: 0; color: var(--text-muted); font-weight: 600; }
+    .import-preview-wrap td { padding: 6px 10px; border-top: 1px solid var(--border); }
+    .import-preview-wrap tr.skip td { opacity: 0.4; }
+    .import-preview-wrap td.badge-new  { color: var(--green); font-weight: 600; }
+    .import-preview-wrap td.badge-skip { color: var(--yellow); }
+
     /* ── Toast ── */
     .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
     .toast.show { transform: translateY(0); opacity: 1; }
@@ -261,6 +283,7 @@
     </div>
     <div class="toolbar-left">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
+      <button class="btn-ghost" onclick="openImportModal()">📋 インポート</button>
       <button class="btn-primary" onclick="openModal()">+ 銘柄追加</button>
     </div>
   </div>
@@ -374,6 +397,45 @@
       <button class="btn-ghost" id="syncLoadBtn" onclick="gistLoad(false)" style="display:none">📥 クラウドから読込</button>
       <button class="btn-ghost" id="syncDisconnectBtn" onclick="disconnectSync()" style="display:none;color:var(--red)">接続解除</button>
       <button class="btn-primary" id="syncConnectBtn" onclick="connectGist()">接続</button>
+    </div>
+  </div>
+</div>
+
+<!-- インポートモーダル -->
+<div class="overlay" id="importOverlay" onclick="closeImportModal(event)">
+  <div class="modal import-modal">
+    <h2>📋 スプレッドシートからインポート</h2>
+
+    <!-- Step 1: 貼り付け -->
+    <div id="importStep1">
+      <p class="import-instructions">
+        スプレッドシートのセル範囲をコピー <kbd>Ctrl+C</kbd> して、下のエリアに貼り付けてください。<br>
+        <strong>1行目はヘッダー行として認識します。</strong> 列の順序は問いません。
+      </p>
+      <div class="import-format-hint">
+        <strong>自動認識する列名の例:</strong><br>
+        ティッカー/銘柄コード/証券コード &nbsp;・&nbsp; 銘柄名/会社名 &nbsp;・&nbsp; 保有数量/株数/口数 &nbsp;・&nbsp; 平均取得単価/取得単価<br>
+        時価・簿価・損益・増減率などの計算列は自動スキップされます。
+      </div>
+      <textarea class="import-textarea" id="importTextarea"
+        placeholder="ここにスプレッドシートのデータを貼り付け...&#10;&#10;例)&#10;銘柄コード&#9;銘柄名&#9;保有数量&#9;平均取得単価&#10;7203&#9;トヨタ自動車&#9;100&#9;2850&#10;AAPL&#9;Apple Inc.&#9;30&#9;175"></textarea>
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="closeImportModal()">キャンセル</button>
+        <button class="btn-primary" onclick="parseImportData()">プレビュー →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: プレビュー -->
+    <div id="importStep2" style="display:none">
+      <p class="import-summary" id="importSummary"></p>
+      <div class="import-col-map" id="importColMap"></div>
+      <div class="import-preview-wrap">
+        <table id="importPreviewTable"></table>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="showImportStep(1)">← 戻る</button>
+        <button class="btn-primary" id="importConfirmBtn" onclick="executeImport()">インポート実行</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1183,6 +1245,153 @@ function deleteStock(id) {
   stocks = stocks.filter(x => x.id !== id);
   save(); render(); renderPieChart();
   toast(`${s.ticker} を削除しました`);
+}
+
+// ── インポート ────────────────────────────────────────────────────
+let importRows = [];
+
+const IMPORT_KEYWORDS = {
+  ticker:   ['ティッカー', 'ticker', '銘柄コード', '証券コード', 'シンボル', 'コード'],
+  name:     ['銘柄名', '会社名', '名称', 'name'],
+  quantity: ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
+  avgPrice: ['平均取得単価', '取得単価', '平均単価', '取得価格', '平均コスト', '平均取得', '取得'],
+  sector:   ['セクター', '業種', 'sector'],
+  note:     ['メモ', '備考', 'note', '注記', 'コメント'],
+};
+
+function openImportModal() {
+  document.getElementById('importTextarea').value = '';
+  showImportStep(1);
+  document.getElementById('importOverlay').classList.add('open');
+}
+
+function closeImportModal(e) {
+  if (e && e.target !== document.getElementById('importOverlay')) return;
+  document.getElementById('importOverlay').classList.remove('open');
+}
+
+function showImportStep(n) {
+  document.getElementById('importStep1').style.display = n === 1 ? '' : 'none';
+  document.getElementById('importStep2').style.display = n === 2 ? '' : 'none';
+}
+
+function detectImportColumns(headers) {
+  const map = {};
+  Object.keys(IMPORT_KEYWORDS).forEach(k => (map[k] = -1));
+  headers.forEach((h, i) => {
+    const lower = h.toLowerCase().trim();
+    for (const [col, kws] of Object.entries(IMPORT_KEYWORDS)) {
+      if (map[col] === -1 && kws.some(kw => lower.includes(kw.toLowerCase()))) {
+        map[col] = i;
+      }
+    }
+  });
+  return map;
+}
+
+function detectMarketFromTicker(ticker) {
+  if (/^\d{4,6}$/.test(ticker)) return 'JP';
+  if (/^[A-Z]{1,5}$/.test(ticker)) return 'US';
+  if (/^[0-9A-Z]{8}$/.test(ticker)) return 'FUND';
+  if (/^[A-Z]/.test(ticker)) return 'US';
+  return 'JP';
+}
+
+function parseNum(cell) {
+  const n = parseFloat((cell || '').replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function parseImportData() {
+  const raw = document.getElementById('importTextarea').value.trim();
+  if (!raw) { toast('データを貼り付けてください', 'error'); return; }
+
+  const lines = raw.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) { toast('ヘッダー行と1行以上のデータが必要です', 'error'); return; }
+
+  const headers = lines[0].split('\t');
+  const colMap  = detectImportColumns(headers);
+
+  if (colMap.ticker < 0) {
+    toast('ティッカー/銘柄コードの列が見つかりません。ヘッダー行を確認してください', 'error');
+    return;
+  }
+
+  importRows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells  = lines[i].split('\t');
+    const ticker = (cells[colMap.ticker] || '').trim().toUpperCase().replace(/\s/g, '');
+    if (!ticker) continue;
+
+    const market    = detectMarketFromTicker(ticker);
+    const qty       = colMap.quantity >= 0 ? parseNum(cells[colMap.quantity]) : 0;
+    const avg       = colMap.avgPrice >= 0 ? parseNum(cells[colMap.avgPrice]) : 0;
+    const name      = colMap.name     >= 0 ? (cells[colMap.name]   || '').trim() : '';
+    const sector    = colMap.sector   >= 0 ? (cells[colMap.sector] || '').trim() : '';
+    const note      = colMap.note     >= 0 ? (cells[colMap.note]   || '').trim() : '';
+    const duplicate = stocks.some(s => s.ticker === ticker);
+
+    importRows.push({ ticker, name, market, sector, note, quantity: qty, avgPrice: avg, duplicate });
+  }
+
+  if (!importRows.length) { toast('有効なデータ行が見つかりません', 'error'); return; }
+
+  renderImportPreview(headers, colMap);
+  showImportStep(2);
+}
+
+function renderImportPreview(headers, colMap) {
+  const LABELS   = { ticker: 'ティッカー', name: '銘柄名', quantity: '保有数量', avgPrice: '平均取得単価', sector: 'セクター', note: 'メモ' };
+  const REQUIRED = new Set(['ticker']);
+
+  document.getElementById('importColMap').innerHTML = Object.entries(LABELS).map(([k, label]) => {
+    const found = colMap[k] >= 0;
+    const cls   = found ? 'found' : (REQUIRED.has(k) ? 'missing' : 'optional');
+    const icon  = found ? '✓' : '–';
+    const col   = found ? ` (${headers[colMap[k]]})` : '';
+    return `<span class="col-tag ${cls}">${icon} ${label}${col}</span>`;
+  }).join('');
+
+  const newCount  = importRows.filter(r => !r.duplicate).length;
+  const skipCount = importRows.filter(r =>  r.duplicate).length;
+  document.getElementById('importSummary').innerHTML =
+    `<strong>${importRows.length}</strong> 件検出 — 新規追加: <strong>${newCount}</strong> 件` +
+    (skipCount ? `、既存スキップ: <strong>${skipCount}</strong> 件` : '');
+
+  document.getElementById('importPreviewTable').innerHTML =
+    `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
+    `<tbody>` + importRows.map(r => `
+      <tr class="${r.duplicate ? 'skip' : ''}">
+        <td>${r.ticker}</td>
+        <td>${r.name || '—'}</td>
+        <td>${r.market}</td>
+        <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
+        <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
+        <td class="${r.duplicate ? 'badge-skip' : 'badge-new'}">${r.duplicate ? '⚠ 既存' : '✓ 新規'}</td>
+      </tr>`).join('') + `</tbody>`;
+
+  document.getElementById('importConfirmBtn').disabled = newCount === 0;
+}
+
+function executeImport() {
+  const toAdd = importRows.filter(r => !r.duplicate);
+  if (!toAdd.length) { toast('追加できる銘柄がありません', 'error'); return; }
+
+  toAdd.forEach(r => {
+    const yahooTicker = r.market === 'US' ? r.ticker : r.ticker + '.T';
+    const currency    = r.market === 'US' ? 'USD' : 'JPY';
+    stocks.push({
+      id: uid(), ticker: r.ticker, yahooTicker, name: r.name,
+      market: r.market, sector: r.sector, currency,
+      quantity: r.quantity, avgPrice: r.avgPrice,
+      currentPrice: r.avgPrice, prevClose: r.avgPrice,
+      note: r.note, lastFetched: null, fetchError: null,
+    });
+  });
+
+  save(); render(); renderPieChart();
+  document.getElementById('importOverlay').classList.remove('open');
+  toast(`${toAdd.length} 件をインポートしました`, 'success');
 }
 
 // ── トースト ──────────────────────────────────────────────────────
