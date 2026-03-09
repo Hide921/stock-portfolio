@@ -154,6 +154,8 @@
     .import-preview-wrap tr.skip td { opacity: 0.4; }
     .import-preview-wrap td.badge-new  { color: var(--green); font-weight: 600; }
     .import-preview-wrap td.badge-skip { color: var(--yellow); }
+    .importing-name { color: var(--text-muted); font-style: italic; font-size: 11px; }
+    .import-name-done { color: var(--green); }
 
     /* ── Toast ── */
     .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
@@ -1360,17 +1362,50 @@ function renderImportPreview(headers, colMap) {
 
   document.getElementById('importPreviewTable').innerHTML =
     `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
-    `<tbody>` + importRows.map(r => `
+    `<tbody>` + importRows.map((r, i) => {
+      const nameCell = r.name
+        ? r.name
+        : r.duplicate
+          ? (stocks.find(s => s.ticker === r.ticker)?.name || '—')
+          : `<span class="importing-name">取得中...</span>`;
+      return `
       <tr class="${r.duplicate ? 'skip' : ''}">
         <td>${r.ticker}</td>
-        <td>${r.name || '—'}</td>
+        <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
         <td>${r.market}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
         <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
         <td class="${r.duplicate ? 'badge-skip' : 'badge-new'}">${r.duplicate ? '⚠ 既存' : '✓ 新規'}</td>
-      </tr>`).join('') + `</tbody>`;
+      </tr>`;
+    }).join('') + `</tbody>`;
 
   document.getElementById('importConfirmBtn').disabled = newCount === 0;
+  fetchImportNames();
+}
+
+async function fetchImportNames() {
+  const pending = importRows
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => !r.name && !r.duplicate);
+
+  if (!pending.length) return;
+
+  await Promise.allSettled(
+    pending.map(async ({ r, i }) => {
+      const yahooTicker = r.market === 'US' ? r.ticker : r.ticker + '.T';
+      try {
+        const result = await yhFetch(yahooTicker, '?interval=1d&range=2d');
+        r.name = result.meta.shortName || result.meta.longName || '';
+      } catch(e) {
+        // 取得失敗は無視（名前なしのまま）
+      }
+      const cell = document.querySelector(`#importPreviewTable .import-name-cell[data-idx="${i}"]`);
+      if (cell) {
+        cell.textContent = r.name || '—';
+        if (r.name) cell.classList.add('import-name-done');
+      }
+    })
+  );
 }
 
 function executeImport() {
