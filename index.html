@@ -106,9 +106,10 @@
     .ticker      { font-weight: 700; font-size: 14px; }
     .ticker-name { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
     .badge { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-left: 4px; }
-    .badge-jp   { background: rgba(79,110,247,0.2);  color: var(--accent); }
-    .badge-us   { background: rgba(245,158,11,0.2);  color: var(--yellow); }
-    .badge-fund { background: rgba(34,197,94,0.2);   color: var(--green); }
+    .badge-jp     { background: rgba(79,110,247,0.2);  color: var(--accent); }
+    .badge-us     { background: rgba(245,158,11,0.2);  color: var(--yellow); }
+    .badge-fund   { background: rgba(34,197,94,0.2);   color: var(--green); }
+    .badge-crypto { background: rgba(251,146,60,0.2);  color: #fb923c; }
     .profit  { color: var(--green); font-weight: 600; }
     .loss    { color: var(--red);   font-weight: 600; }
     .neutral { color: var(--text-muted); }
@@ -281,6 +282,7 @@
         <option value="JP">日本株</option>
         <option value="US">米国株</option>
         <option value="FUND">投資信託</option>
+        <option value="CRYPTO">暗号資産</option>
       </select>
     </div>
     <div class="toolbar-left">
@@ -322,6 +324,7 @@
           <option value="JP">日本株 (JPY)</option>
           <option value="US">米国株 (USD)</option>
           <option value="FUND">投資信託 (JPY)</option>
+          <option value="CRYPTO">暗号資産 (USD)</option>
         </select>
       </div>
       <div class="form-group">
@@ -598,9 +601,11 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 
 function getYahooTicker(ticker, market) {
   const t = (ticker || '').trim().toUpperCase();
-  return market === 'US' ? t : t + '.T';
+  if (market === 'US')     return t;
+  if (market === 'CRYPTO') return t.replace(/-USD$/i, '') + '-USD';
+  return t + '.T';
 }
-function getCurrency(market) { return market === 'US' ? 'USD' : 'JPY'; }
+function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ? 'USD' : 'JPY'; }
 function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
 
 function fmtPrice(p, cur) {
@@ -1198,7 +1203,10 @@ function render() {
   plEl.className   = 'card-value ' + plClass(totalPL);
   document.getElementById('totalPLPct').textContent  = pctStr(totalPLPct);
   document.getElementById('stockCount').textContent  = stocks.length;
-  document.getElementById('marketBreak').textContent = `日本株 ${markets.JP||0} | 米国株 ${markets.US||0} | 投信 ${markets.FUND||0}`;
+  document.getElementById('marketBreak').textContent = [
+    `日本株 ${markets.JP||0}`, `米国株 ${markets.US||0}`, `投信 ${markets.FUND||0}`,
+    ...(markets.CRYPTO ? [`暗号資産 ${markets.CRYPTO}`] : []),
+  ].join(' | ');
   const dayEl = document.getElementById('dayPL');
   dayEl.textContent = (dayPLJPY >= 0 ? '+' : '-') + fmtJPY(dayPLJPY);
   dayEl.className   = 'card-value ' + plClass(dayPLJPY);
@@ -1215,14 +1223,15 @@ function render() {
     const pl     = value - s.avgPrice * s.quantity;
     const plPct  = s.avgPrice ? pl / (s.avgPrice * s.quantity) * 100 : 0;
     const dayChg = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
-    const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : 'badge-fund';
-    const unit   = s.market === 'FUND' ? '口' : '株';
+    const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
+    const mLabel = s.market === 'FUND' ? '投信' : s.market === 'CRYPTO' ? 'BTC' : s.market;
+    const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
     const fetchIcon = s.lastFetched
       ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
                       : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
       : '';
     return `<tr>
-      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${s.market==='FUND'?'投信':s.market}</span></div>
+      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span></div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
       <td>${fmtPrice(s.avgPrice, s.currency)}</td>
@@ -1283,9 +1292,9 @@ document.addEventListener('keydown', e => {
 function onMarketChange() {
   const market = document.getElementById('fMarket').value;
   const cur    = getCurrency(market);
-  const hints  = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁 (例: 0131103C)' };
+  const hints  = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁 (例: 0131103C)', CRYPTO:'仮想通貨ティッカー (例: BTC)' };
   document.getElementById('tickerHint').textContent = hints[market] || '';
-  document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 *' : '保有数量 (株) *';
+  document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 *' : market === 'CRYPTO' ? '保有数量 (枚) *' : '保有数量 (株) *';
   document.getElementById('avgLabel').textContent   = market === 'FUND' ? '平均取得価格 (円/口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
   document.getElementById('fundNote').classList.toggle('visible', market === 'FUND');
 }
@@ -1416,6 +1425,7 @@ function detectImportColumns(headers) {
 
 function detectMarketFromTicker(ticker) {
   if (/^\d{4,6}$/.test(ticker)) return 'JP';
+  if (/-USD$/i.test(ticker))    return 'CRYPTO';
   if (/^[A-Z]{1,5}$/.test(ticker)) return 'US';
   if (/^[0-9A-Z]{8}$/.test(ticker)) return 'FUND';
   if (/^[A-Z]/.test(ticker)) return 'US';
