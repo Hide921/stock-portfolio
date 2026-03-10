@@ -766,6 +766,10 @@ function togglePATVisibility() {
   const isHide = input.type === 'password';
   input.type   = isHide ? 'text' : 'password';
   btn.textContent = isHide ? '🙈 隠す' : '👁 表示';
+  // 接続済みの場合、表示↔マスク を切り替える
+  if (syncCfg.pat && syncCfg.gistId) {
+    input.value = isHide ? syncCfg.pat : '•'.repeat(20);
+  }
 }
 
 async function connectGist() {
@@ -1238,7 +1242,8 @@ function render() {
   });
   const totalPL    = totalValueJPY - totalCostJPY;
   const totalPLPct = totalCostJPY  ? totalPL  / totalCostJPY  * 100 : 0;
-  const dayPLPct   = totalValueJPY ? dayPLJPY / (totalValueJPY - dayPLJPY) * 100 : 0;
+  const allDayPLJPY = dayPLJPY + marginDayPLJPY; // 本日損益は現物＋信用合算
+  const dayPLPct   = totalValueJPY ? allDayPLJPY / (totalValueJPY - allDayPLJPY) * 100 : 0;
   const marginPL    = marginValueJPY - marginCostJPY;
   const marginPLPct = marginCostJPY ? marginPL / marginCostJPY * 100 : 0;
   const hasMargin   = stocks.some(s => s.tradeType === 'margin');
@@ -1255,8 +1260,8 @@ function render() {
     ...(markets.CRYPTO ? [`暗号資産 ${markets.CRYPTO}`] : []),
   ].join(' | ');
   const dayEl = document.getElementById('dayPL');
-  dayEl.textContent = (dayPLJPY >= 0 ? '+' : '-') + fmtJPY(dayPLJPY);
-  dayEl.className   = 'card-value ' + plClass(dayPLJPY);
+  dayEl.textContent = (allDayPLJPY >= 0 ? '+' : '-') + fmtJPY(allDayPLJPY);
+  dayEl.className   = 'card-value ' + plClass(allDayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
 
   // 信用損益カード
