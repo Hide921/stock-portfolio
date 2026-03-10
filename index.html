@@ -400,7 +400,10 @@
     </div>
     <div class="form-group" style="margin-top:16px">
       <label>Personal Access Token</label>
-      <input type="password" id="syncPAT" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;font-family:monospace;letter-spacing:1px">
+      <div style="position:relative;display:flex;align-items:center">
+        <input type="password" id="syncPAT" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;font-family:monospace;letter-spacing:1px;padding-right:72px">
+        <button type="button" id="syncPATToggle" onclick="togglePATVisibility()" style="position:absolute;right:8px;background:transparent;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;white-space:nowrap" title="表示/非表示">👁 表示</button>
+      </div>
       <span class="form-hint">トークンはこのデバイスのみに保存されます（外部サーバーへは送信されません）</span>
     </div>
     <div id="syncStatusArea" style="display:none;margin-top:12px;padding:10px 14px;border-radius:6px;font-size:12px;white-space:pre-line;line-height:1.6"></div>
@@ -757,6 +760,14 @@ async function gistLoad(silent = false) {
   }
 }
 
+function togglePATVisibility() {
+  const input  = document.getElementById('syncPAT');
+  const btn    = document.getElementById('syncPATToggle');
+  const isHide = input.type === 'password';
+  input.type   = isHide ? 'text' : 'password';
+  btn.textContent = isHide ? '🙈 隠す' : '👁 表示';
+}
+
 async function connectGist() {
   const patInput = document.getElementById('syncPAT');
   const pat = patInput.value.trim();
@@ -869,12 +880,16 @@ function showSyncStatus(type, msg) {
 
 function openSyncModal() {
   document.getElementById('syncStatusArea').style.display = 'none';
+  // トグルボタンを「隠す」状態にリセット
+  const patInput = document.getElementById('syncPAT');
+  patInput.type  = 'password';
+  document.getElementById('syncPATToggle').textContent = '👁 表示';
   if (syncCfg.pat && syncCfg.gistId) {
-    document.getElementById('syncPAT').value = '•'.repeat(20);
+    patInput.value = '•'.repeat(20);
     setSyncModalState('connected');
     showSyncStatus('success', `☁️ クラウド同期が有効です\nGist ID: ${syncCfg.gistId.slice(0, 10)}...\n\nデータ変更時に自動的にクラウドへ保存されます。`);
   } else {
-    document.getElementById('syncPAT').value = '';
+    patInput.value = '';
     setSyncModalState('disconnected');
   }
   document.getElementById('syncOverlay').classList.add('open');
