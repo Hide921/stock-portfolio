@@ -109,7 +109,8 @@
     .badge-jp     { background: rgba(79,110,247,0.2);  color: var(--accent); }
     .badge-us     { background: rgba(245,158,11,0.2);  color: var(--yellow); }
     .badge-fund   { background: rgba(34,197,94,0.2);   color: var(--green); }
-    .badge-crypto { background: rgba(251,146,60,0.2);  color: #fb923c; }
+    .badge-crypto  { background: rgba(251,146,60,0.2);  color: #fb923c; }
+    .badge-margin  { background: rgba(239,68,68,0.15);  color: #f87171; font-size: 9px; }
     .profit  { color: var(--green); font-weight: 600; }
     .loss    { color: var(--red);   font-weight: 600; }
     .neutral { color: var(--text-muted); }
@@ -284,6 +285,11 @@
         <option value="FUND">投資信託</option>
         <option value="CRYPTO">暗号資産</option>
       </select>
+      <select id="tradeFilter">
+        <option value="">現物+信用</option>
+        <option value="spot">現物のみ</option>
+        <option value="margin">信用のみ</option>
+      </select>
     </div>
     <div class="toolbar-left">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
@@ -325,6 +331,13 @@
           <option value="US">米国株 (USD)</option>
           <option value="FUND">投資信託 (JPY)</option>
           <option value="CRYPTO">暗号資産 (USD)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>取引種別</label>
+        <select id="fTradeType">
+          <option value="spot">現物</option>
+          <option value="margin">信用買い</option>
         </select>
       </div>
       <div class="form-group">
@@ -586,8 +599,9 @@ let isFetching    = false;
 let editId        = null;
 let sortKey       = 'value';
 let sortDir       = -1;
-let filterText    = '';
-let filterMarket  = '';
+let filterText       = '';
+let filterMarket     = '';
+let filterTradeType  = '';
 
 let autoRateEnabled  = false;
 let autoRateInterval = null;
@@ -627,6 +641,7 @@ function migrateStock(s) {
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
   if (!('lastFetched' in s)) s.lastFetched = null;
   if (!('fetchError'  in s)) s.fetchError  = null;
+  if (!s.tradeType)          s.tradeType   = 'spot';
   // 万口単位 → 口単位 への一回限りのマイグレーション
   if (s.market === 'FUND' && !s._perKuchi) {
     s.quantity     = Math.round(s.quantity * 10000);
@@ -1165,7 +1180,8 @@ function render() {
   let list = stocks.filter(s => {
     const q = filterText.toLowerCase();
     return (!q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (s.sector||'').toLowerCase().includes(q))
-        && (!filterMarket || s.market === filterMarket);
+        && (!filterMarket    || s.market     === filterMarket)
+        && (!filterTradeType || s.tradeType  === filterTradeType);
   });
 
   list.sort((a, b) => {
@@ -1231,7 +1247,7 @@ function render() {
                       : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
       : '';
     return `<tr>
-      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span></div>
+      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}</div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
       <td>${fmtPrice(s.avgPrice, s.currency)}</td>
@@ -1257,16 +1273,18 @@ function sortBy(key) {
   if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
   render();
 }
-document.getElementById('searchInput').addEventListener('input',   e => { filterText   = e.target.value; render(); });
-document.getElementById('marketFilter').addEventListener('change', e => { filterMarket = e.target.value; render(); });
+document.getElementById('searchInput').addEventListener('input',   e => { filterText      = e.target.value; render(); });
+document.getElementById('marketFilter').addEventListener('change', e => { filterMarket    = e.target.value; render(); });
+document.getElementById('tradeFilter').addEventListener('change',  e => { filterTradeType = e.target.value; render(); });
 
 // ── モーダル ──────────────────────────────────────────────────────
 function openModal(id = null) {
   editId = id;
   const s = id ? stocks.find(x => x.id === id) : null;
   document.getElementById('modalTitle').textContent = id ? '銘柄を編集' : '銘柄を追加';
-  document.getElementById('fMarket').value  = s?.market   || 'JP';
-  document.getElementById('fTicker').value  = s?.ticker   || '';
+  document.getElementById('fMarket').value     = s?.market     || 'JP';
+  document.getElementById('fTradeType').value  = s?.tradeType  || 'spot';
+  document.getElementById('fTicker').value     = s?.ticker     || '';
   document.getElementById('fName').value    = s?.name     || '';
   document.getElementById('fSector').value  = s?.sector   || '';
   document.getElementById('fQty').value     = s?.quantity || '';
@@ -1341,9 +1359,10 @@ async function autoFetchName(ticker, market) {
   }
 }
 function saveStock() {
-  const market  = document.getElementById('fMarket').value;
-  const ticker  = document.getElementById('fTicker').value.trim().toUpperCase();
-  const name    = document.getElementById('fName').value.trim();
+  const market     = document.getElementById('fMarket').value;
+  const tradeType  = document.getElementById('fTradeType').value;
+  const ticker     = document.getElementById('fTicker').value.trim().toUpperCase();
+  const name       = document.getElementById('fName').value.trim();
   const sector  = document.getElementById('fSector').value.trim();
   const qty     = parseFloat(document.getElementById('fQty').value);
   const avg     = parseFloat(document.getElementById('fAvg').value);
@@ -1358,11 +1377,11 @@ function saveStock() {
 
   if (editId) {
     const idx = stocks.findIndex(s => s.id === editId);
-    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, note };
+    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, note };
     toast('銘柄を更新しました', 'success');
   } else {
     if (stocks.find(s => s.ticker === ticker && s.market === market)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
-    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
     toast(`${ticker} を追加しました`, 'success');
   }
 
