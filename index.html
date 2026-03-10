@@ -1204,9 +1204,11 @@ function render() {
   let totalValueJPY = 0, totalCostJPY = 0, dayPLJPY = 0;
   const markets = { JP: 0, US: 0, FUND: 0 };
   stocks.forEach(s => {
-    totalValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
-    totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
-    dayPLJPY      += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
+    if (s.tradeType !== 'margin') {
+      totalValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
+      totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
+      dayPLJPY      += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
+    }
     markets[s.market] = (markets[s.market] || 0) + 1;
   });
   const totalPL    = totalValueJPY - totalCostJPY;
