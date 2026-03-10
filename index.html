@@ -235,6 +235,11 @@
       <div class="card-value neutral" id="dayPL">¥0</div>
       <div class="card-sub" id="dayPLPct">0.00%</div>
     </div>
+    <div class="card" id="marginCard" style="display:none">
+      <div class="card-label">信用損益 (円換算)</div>
+      <div class="card-value neutral" id="marginPL">¥0</div>
+      <div class="card-sub" id="marginPLSub">-</div>
+    </div>
   </div>
 
   <!-- Charts -->
@@ -1202,9 +1207,14 @@ function render() {
 
   // サマリー集計
   let totalValueJPY = 0, totalCostJPY = 0, dayPLJPY = 0;
+  let marginValueJPY = 0, marginCostJPY = 0, marginDayPLJPY = 0;
   const markets = { JP: 0, US: 0, FUND: 0 };
   stocks.forEach(s => {
-    if (s.tradeType !== 'margin') {
+    if (s.tradeType === 'margin') {
+      marginValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
+      marginCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
+      marginDayPLJPY += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
+    } else {
       totalValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
       totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
       dayPLJPY      += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
@@ -1214,6 +1224,9 @@ function render() {
   const totalPL    = totalValueJPY - totalCostJPY;
   const totalPLPct = totalCostJPY  ? totalPL  / totalCostJPY  * 100 : 0;
   const dayPLPct   = totalValueJPY ? dayPLJPY / (totalValueJPY - dayPLJPY) * 100 : 0;
+  const marginPL    = marginValueJPY - marginCostJPY;
+  const marginPLPct = marginCostJPY ? marginPL / marginCostJPY * 100 : 0;
+  const hasMargin   = stocks.some(s => s.tradeType === 'margin');
 
   document.getElementById('totalValue').textContent  = fmtJPY(totalValueJPY);
   document.getElementById('totalCost').textContent   = '取得総額: ' + fmtJPY(totalCostJPY);
@@ -1230,6 +1243,16 @@ function render() {
   dayEl.textContent = (dayPLJPY >= 0 ? '+' : '-') + fmtJPY(dayPLJPY);
   dayEl.className   = 'card-value ' + plClass(dayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
+
+  // 信用損益カード
+  document.getElementById('marginCard').style.display = hasMargin ? '' : 'none';
+  if (hasMargin) {
+    const mPlEl = document.getElementById('marginPL');
+    mPlEl.textContent = (marginPL >= 0 ? '+' : '-') + fmtJPY(marginPL);
+    mPlEl.className   = 'card-value ' + plClass(marginPL);
+    document.getElementById('marginPLSub').textContent =
+      `${pctStr(marginPLPct)} | 本日: ${marginDayPLJPY >= 0 ? '+' : '-'}${fmtJPY(marginDayPLJPY)}`;
+  }
 
   // テーブル行
   const tbody = document.getElementById('tableBody');
