@@ -330,7 +330,7 @@
         <span class="form-hint" id="tickerHint">証券コード4桁 (日本株)</span>
       </div>
       <div class="fund-note" id="fundNote">
-        💡 <strong>投資信託:</strong> ファンドコード(8桁英数字)を入力。口数は万口単位、価格は基準価額(円/万口)で入力。
+        💡 <strong>投資信託:</strong> ファンドコード(8桁英数字)を入力。口数・価格はそのまま入力 (1口=1口)。
       </div>
       <div class="form-group full">
         <label>銘柄名 *</label>
@@ -481,9 +481,12 @@ async function getCurrentPriceFundJS(ticker) {
   const fp      = state.mainFundPriceBoard?.fundPrices || {};
   const priceStr = fp.price || '';
   if (!priceStr) throw new Error('基準価額なし');
-  const price  = parseFloat(priceStr.replace(/,/g, ''));
-  const change = parseFloat((fp.changePrice || '0').replace(/△/g, '-').replace(/,/g, '')) || 0;
-  return { price, prev_close: Math.round((price - change) * 10000) / 10000, currency: 'JPY' };
+  // Yahoo Finance Japan は 円/万口 で返すので ÷10,000 して 円/口 に変換
+  const pricePerManKuchi  = parseFloat(priceStr.replace(/,/g, ''));
+  const changePerManKuchi = parseFloat((fp.changePrice || '0').replace(/△/g, '-').replace(/,/g, '')) || 0;
+  const price     = pricePerManKuchi  / 10000;
+  const prevClose = (pricePerManKuchi - changePerManKuchi) / 10000;
+  return { price, prev_close: Math.round(prevClose * 10000000) / 10000000, currency: 'JPY' };
 }
 
 async function getFundNameJS(ticker) {
@@ -519,7 +522,8 @@ async function getCurrentPriceFund(ticker) {
     const data = await res.json();
     const d = data[ticker];
     if (!d || d.error || !d.price) throw new Error(d?.error || '価格データなし');
-    return { price: d.price, prev_close: d.prev_close, currency: d.currency || 'JPY' };
+    // サーバーも 円/万口 で返すので ÷10,000 して 円/口 に変換
+    return { price: d.price / 10000, prev_close: d.prev_close ? d.prev_close / 10000 : null, currency: d.currency || 'JPY' };
   }
 }
 
@@ -543,9 +547,10 @@ async function getHistoryFund(ticker, period) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return data[ticker] || [];
+    // サーバーの履歴は 円/万口 なので ÷10,000 して 円/口 に変換
+    return (data[ticker] || []).map(d => ({ ...d, close: d.close / 10000 }));
   } catch(e) {
-    // サーバーなし(GitHub Pages)の場合は現在価格の1点のみ返す
+    // サーバーなし(GitHub Pages)の場合は現在価格の1点のみ返す (既に円/口)
     try {
       const d = await getCurrentPriceFundJS(ticker);
       return [{ date: new Date().toISOString().slice(0, 10), close: d.price }];
@@ -601,7 +606,9 @@ function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
 function fmtPrice(p, cur) {
   if (p == null) return '—';
   if (cur === 'USD') return '$' + Math.abs(p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return '¥' + Math.abs(p).toLocaleString('ja-JP', { maximumFractionDigits: p < 100 ? 2 : 0 });
+  const a = Math.abs(p);
+  const dec = a < 10 ? 4 : a < 100 ? 2 : 0;
+  return '¥' + a.toLocaleString('ja-JP', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 }
 function fmtJPY(n)       { return '¥' + Math.round(Math.abs(n)).toLocaleString('ja-JP'); }
 function fmtPL(pl, cur)  { return (pl >= 0 ? '+' : '-') + fmtPrice(Math.abs(pl), cur); }
@@ -615,6 +622,14 @@ function migrateStock(s) {
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
   if (!('lastFetched' in s)) s.lastFetched = null;
   if (!('fetchError'  in s)) s.fetchError  = null;
+  // 万口単位 → 口単位 への一回限りのマイグレーション
+  if (s.market === 'FUND' && !s._perKuchi) {
+    s.quantity     = Math.round(s.quantity * 10000);
+    s.avgPrice     = s.avgPrice     / 10000;
+    s.currentPrice = s.currentPrice / 10000;
+    if (s.prevClose) s.prevClose = s.prevClose / 10000;
+    s._perKuchi = true;
+  }
   return s;
 }
 
@@ -625,7 +640,7 @@ function defaultStocks() {
     { id: uid(), ticker:'9984',     yahooTicker:'9984.T',     name:'ソフトバンクG',          market:'JP',   sector:'IT',                 currency:'JPY', quantity:200, avgPrice:7200,  currentPrice:8450,  prevClose:8300,  note:'',        lastFetched:null, fetchError:null },
     { id: uid(), ticker:'AAPL',     yahooTicker:'AAPL',       name:'Apple Inc.',             market:'US',   sector:'テクノロジー',        currency:'USD', quantity:30,  avgPrice:175,   currentPrice:185.5, prevClose:183.2, note:'',        lastFetched:null, fetchError:null },
     { id: uid(), ticker:'NVDA',     yahooTicker:'NVDA',       name:'NVIDIA Corp.',           market:'US',   sector:'半導体',              currency:'USD', quantity:20,  avgPrice:430,   currentPrice:875,   prevClose:860,   note:'',        lastFetched:null, fetchError:null },
-    { id: uid(), ticker:'0131103C', yahooTicker:'0131103C.T', name:'eMAXIS Slim 全世界株式', market:'FUND', sector:'インデックスファンド', currency:'JPY', quantity:100, avgPrice:18000, currentPrice:22000, prevClose:21800, note:'100万口', lastFetched:null, fetchError:null },
+    { id: uid(), ticker:'0131103C', yahooTicker:'0131103C.T', name:'eMAXIS Slim 全世界株式', market:'FUND', sector:'インデックスファンド', currency:'JPY', quantity:1000000, avgPrice:1.8, currentPrice:2.2, prevClose:2.18, note:'', lastFetched:null, fetchError:null, _perKuchi:true },
   ];
 }
 
@@ -1201,7 +1216,7 @@ function render() {
     const plPct  = s.avgPrice ? pl / (s.avgPrice * s.quantity) * 100 : 0;
     const dayChg = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
     const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : 'badge-fund';
-    const unit   = s.market === 'FUND' ? '万口' : '株';
+    const unit   = s.market === 'FUND' ? '口' : '株';
     const fetchIcon = s.lastFetched
       ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
                       : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
@@ -1270,8 +1285,8 @@ function onMarketChange() {
   const cur    = getCurrency(market);
   const hints  = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁 (例: 0131103C)' };
   document.getElementById('tickerHint').textContent = hints[market] || '';
-  document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 (万口単位) *' : '保有数量 (株) *';
-  document.getElementById('avgLabel').textContent   = market === 'FUND' ? '基準価額 (円/万口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
+  document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 *' : '保有数量 (株) *';
+  document.getElementById('avgLabel').textContent   = market === 'FUND' ? '平均取得価格 (円/口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
   document.getElementById('fundNote').classList.toggle('visible', market === 'FUND');
 }
 
@@ -1338,7 +1353,7 @@ function saveStock() {
     toast('銘柄を更新しました', 'success');
   } else {
     if (stocks.find(s => s.ticker === ticker && s.market === market)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
-    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null });
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
     toast(`${ticker} を追加しました`, 'success');
   }
 
@@ -1532,7 +1547,7 @@ function executeImport() {
       market: r.market, sector: r.sector, currency,
       quantity: r.quantity, avgPrice: r.avgPrice,
       currentPrice: r.avgPrice, prevClose: r.avgPrice,
-      note: r.note, lastFetched: null, fetchError: null,
+      note: r.note, lastFetched: null, fetchError: null, _perKuchi: true,
     });
   });
 
