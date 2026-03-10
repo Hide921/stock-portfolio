@@ -246,6 +246,36 @@ def get_history():
     return jsonify(result)
 
 
+@app.route('/api/name')
+def get_name():
+    """
+    GET /api/name?ticker=03319172.T
+    銘柄名を返す。投資信託は Yahoo Finance Japan から、株式は yfinance から取得。
+    """
+    ticker = request.args.get('ticker', '').strip()
+    if not ticker:
+        return jsonify({'name': '', 'error': 'ticker が必要です'}), 400
+    try:
+        if is_fund_ticker(ticker):
+            fund_code = ticker[:-2]
+            url = f'https://finance.yahoo.co.jp/quote/{fund_code}'
+            r = req.get(url, headers=_YF_JP_HEADERS, timeout=10)
+            r.raise_for_status()
+            # <title> からファンド名を抽出
+            m = re.search(r'<title>\s*(.+?)(?:【|\[|\|)', r.text)
+            name = m.group(1).strip() if m else ''
+            logging.info(f'NAME FUND {fund_code}: {name!r}')
+            return jsonify({'name': name})
+        else:
+            info = yf.Ticker(ticker).info
+            name = info.get('shortName') or info.get('longName') or ''
+            logging.info(f'NAME {ticker}: {name!r}')
+            return jsonify({'name': name})
+    except Exception as e:
+        logging.warning(f'NAME ERR {ticker}: {e}')
+        return jsonify({'name': '', 'error': str(e)})
+
+
 @app.route('/api/usdjpy')
 def get_usdjpy():
     """GET /api/usdjpy — 現在のUSD/JPYレートを返す"""

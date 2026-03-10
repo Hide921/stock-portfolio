@@ -334,15 +334,12 @@
       </div>
       <div class="form-group full">
         <label>銘柄名 *</label>
-        <input type="text" id="fName" placeholder="例: トヨタ自動車">
+        <input type="text" id="fName" placeholder="ティッカー入力後に自動取得">
+        <span class="form-hint" id="nameHint" style="display:none">取得中…</span>
       </div>
       <div class="form-group">
         <label>セクター</label>
         <input type="text" id="fSector" placeholder="例: 自動車">
-      </div>
-      <div class="form-group">
-        <label>Yahooティッカー (自動)</label>
-        <input type="text" id="fYahoo" placeholder="7203.T" style="color:var(--text-muted)" readonly>
       </div>
       <div class="form-group">
         <label id="qtyLabel">保有数量 (株) *</label>
@@ -351,14 +348,6 @@
       <div class="form-group">
         <label id="avgLabel">平均取得価格 *</label>
         <input type="number" id="fAvg" placeholder="2500" min="0" step="0.01">
-      </div>
-      <div class="form-group">
-        <label>現在価格</label>
-        <input type="number" id="fCurrent" placeholder="取得価格と同じ" min="0" step="0.01">
-      </div>
-      <div class="form-group">
-        <label>前日終値</label>
-        <input type="number" id="fPrev" placeholder="任意" min="0" step="0.01">
       </div>
       <div class="form-group full">
         <label>メモ</label>
@@ -1195,11 +1184,9 @@ function openModal(id = null) {
   document.getElementById('fSector').value  = s?.sector   || '';
   document.getElementById('fQty').value     = s?.quantity || '';
   document.getElementById('fAvg').value     = s?.avgPrice || '';
-  document.getElementById('fCurrent').value = s?.currentPrice || '';
-  document.getElementById('fPrev').value    = s?.prevClose    || '';
   document.getElementById('fNote').value    = s?.note || '';
+  document.getElementById('nameHint').style.display = 'none';
   onMarketChange();
-  if (s) document.getElementById('fYahoo').value = s.yahooTicker || '';
   document.getElementById('overlay').classList.add('open');
   document.getElementById('fTicker').focus();
 }
@@ -1223,13 +1210,36 @@ function onMarketChange() {
   document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 (万口単位) *' : '保有数量 (株) *';
   document.getElementById('avgLabel').textContent   = market === 'FUND' ? '基準価額 (円/万口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
   document.getElementById('fundNote').classList.toggle('visible', market === 'FUND');
-  const t = document.getElementById('fTicker').value;
-  if (t) document.getElementById('fYahoo').value = getYahooTicker(t, market);
 }
+
+let _nameFetchTimer = null;
 function onTickerInput() {
-  const market = document.getElementById('fMarket').value;
-  const ticker = document.getElementById('fTicker').value;
-  document.getElementById('fYahoo').value = ticker ? getYahooTicker(ticker, market) : '';
+  const raw    = document.getElementById('fTicker').value.trim().toUpperCase();
+  const market = detectMarketFromTicker(raw);
+  document.getElementById('fMarket').value = market;
+  onMarketChange();
+  clearTimeout(_nameFetchTimer);
+  if (raw.length >= 4) {
+    _nameFetchTimer = setTimeout(() => autoFetchName(raw, market), 600);
+  }
+}
+async function autoFetchName(ticker, market) {
+  const nameEl = document.getElementById('fName');
+  if (nameEl.value) return;   // 手動入力済みなら上書きしない
+  const hint = document.getElementById('nameHint');
+  hint.style.display = '';
+  try {
+    const yahooTicker = getYahooTicker(ticker, market);
+    const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.name && !nameEl.value) nameEl.value = d.name;
+  } catch(e) {
+  } finally {
+    hint.style.display = 'none';
+  }
 }
 function saveStock() {
   const market  = document.getElementById('fMarket').value;
@@ -1238,8 +1248,6 @@ function saveStock() {
   const sector  = document.getElementById('fSector').value.trim();
   const qty     = parseFloat(document.getElementById('fQty').value);
   const avg     = parseFloat(document.getElementById('fAvg').value);
-  const current = parseFloat(document.getElementById('fCurrent').value) || avg;
-  const prev    = parseFloat(document.getElementById('fPrev').value)    || null;
   const note    = document.getElementById('fNote').value.trim();
 
   if (!ticker || !name || isNaN(qty) || isNaN(avg)) { toast('必須項目を入力してください', 'error'); return; }
@@ -1247,20 +1255,23 @@ function saveStock() {
 
   const yahooTicker = getYahooTicker(ticker, market);
   const currency    = getCurrency(market);
+  const isNew = !editId;
 
   if (editId) {
     const idx = stocks.findIndex(s => s.id === editId);
-    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: current, prevClose: prev, note };
+    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, note };
     toast('銘柄を更新しました', 'success');
   } else {
     if (stocks.find(s => s.ticker === ticker && s.market === market)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
-    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: current, prevClose: prev, note, lastFetched: null, fetchError: null });
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null });
     toast(`${ticker} を追加しました`, 'success');
   }
 
   save(); render(); renderPieChart();
   document.getElementById('overlay').classList.remove('open');
   editId = null;
+  // 新規追加時は自動で価格取得
+  if (isNew) setTimeout(fetchAllPrices, 200);
 }
 function editStock(id)   { openModal(id); }
 function deleteStock(id) {
