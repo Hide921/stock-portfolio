@@ -1405,13 +1405,30 @@ function deleteStock(id) {
 let importRows = [];
 
 const IMPORT_KEYWORDS = {
-  ticker:   ['ティッカー', 'ticker', '銘柄コード', '証券コード', 'シンボル', 'コード'],
-  name:     ['銘柄名', '会社名', '名称', 'name'],
-  quantity: ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
-  avgPrice: ['平均取得単価', '取得単価', '平均単価', '取得価格', '平均コスト', '平均取得', '取得'],
-  sector:   ['セクター', '業種', 'sector'],
-  note:     ['メモ', '備考', 'note', '注記', 'コメント'],
+  ticker:    ['ティッカー', 'ticker', '銘柄コード', '証券コード', 'シンボル', 'コード'],
+  name:      ['銘柄名', '会社名', '名称', 'name'],
+  quantity:  ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
+  avgPrice:  ['平均取得単価', '取得単価', '平均単価', '取得価格', '平均コスト', '平均取得', '取得'],
+  sector:    ['セクター', '業種', 'sector'],
+  tradeType: ['取引種別', 'trade type', '種別'],
+  note:      ['メモ', '備考', 'note', '注記', 'コメント'],
 };
+
+// CSV行パーサ (クォート対応)
+function parseCSVRow(line) {
+  const cells = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (c === ',' && !inQ) { cells.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur);
+  return cells;
+}
 
 function openImportModal() {
   document.getElementById('importTextarea').value = '';
@@ -1461,10 +1478,16 @@ function parseImportData() {
   const raw = document.getElementById('importTextarea').value.trim();
   if (!raw) { toast('データを貼り付けてください', 'error'); return; }
 
-  const lines = raw.split(/\r?\n/).filter(l => l.trim());
+  // BOM除去
+  const cleaned = raw.replace(/^\uFEFF/, '');
+  const lines = cleaned.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) { toast('ヘッダー行と1行以上のデータが必要です', 'error'); return; }
 
-  const headers = lines[0].split('\t');
+  // タブ区切り(スプレッドシート貼付) or カンマ区切り(CSV) を自動判定
+  const isCSV   = !lines[0].includes('\t') && lines[0].includes(',');
+  const splitRow = isCSV ? parseCSVRow : (l => l.split('\t'));
+
+  const headers = splitRow(lines[0]);
   const colMap  = detectImportColumns(headers);
 
   if (colMap.ticker < 0) {
@@ -1474,19 +1497,21 @@ function parseImportData() {
 
   importRows = [];
   for (let i = 1; i < lines.length; i++) {
-    const cells  = lines[i].split('\t');
+    const cells  = splitRow(lines[i]);
     const ticker = (cells[colMap.ticker] || '').trim().toUpperCase().replace(/\s/g, '');
     if (!ticker) continue;
 
-    const market    = detectMarketFromTicker(ticker);
-    const qty       = colMap.quantity >= 0 ? parseNum(cells[colMap.quantity]) : 0;
-    const avg       = colMap.avgPrice >= 0 ? parseNum(cells[colMap.avgPrice]) : 0;
-    const name      = colMap.name     >= 0 ? (cells[colMap.name]   || '').trim() : '';
-    const sector    = colMap.sector   >= 0 ? (cells[colMap.sector] || '').trim() : '';
-    const note      = colMap.note     >= 0 ? (cells[colMap.note]   || '').trim() : '';
-    const duplicate = stocks.some(s => s.ticker === ticker);
+    const market         = detectMarketFromTicker(ticker);
+    const qty            = colMap.quantity  >= 0 ? parseNum(cells[colMap.quantity])          : 0;
+    const avg            = colMap.avgPrice  >= 0 ? parseNum(cells[colMap.avgPrice])          : 0;
+    const name           = colMap.name      >= 0 ? (cells[colMap.name]      || '').trim()    : '';
+    const sector         = colMap.sector    >= 0 ? (cells[colMap.sector]    || '').trim()    : '';
+    const note           = colMap.note      >= 0 ? (cells[colMap.note]      || '').trim()    : '';
+    const tradeTypeRaw   = colMap.tradeType >= 0 ? (cells[colMap.tradeType] || '').trim()    : '';
+    const tradeType      = tradeTypeRaw === '信用買い' ? 'margin' : 'spot';
+    const duplicate      = stocks.some(s => s.ticker === ticker && s.tradeType === tradeType);
 
-    importRows.push({ ticker, name, market, sector, note, quantity: qty, avgPrice: avg, duplicate });
+    importRows.push({ ticker, name, market, tradeType, sector, note, quantity: qty, avgPrice: avg, duplicate });
   }
 
   if (!importRows.length) { toast('有効なデータ行が見つかりません', 'error'); return; }
@@ -1496,7 +1521,7 @@ function parseImportData() {
 }
 
 function renderImportPreview(headers, colMap) {
-  const LABELS   = { ticker: 'ティッカー', name: '銘柄名', quantity: '保有数量', avgPrice: '平均取得単価', sector: 'セクター', note: 'メモ' };
+  const LABELS   = { ticker: 'ティッカー', name: '銘柄名', quantity: '保有数量', avgPrice: '平均取得単価', sector: 'セクター', tradeType: '取引種別', note: 'メモ' };
   const REQUIRED = new Set(['ticker']);
 
   document.getElementById('importColMap').innerHTML = Object.entries(LABELS).map(([k, label]) => {
@@ -1513,19 +1538,21 @@ function renderImportPreview(headers, colMap) {
     `<strong>${importRows.length}</strong> 件検出 — 新規追加: <strong>${newCount}</strong> 件` +
     (skipCount ? `、既存スキップ: <strong>${skipCount}</strong> 件` : '');
 
+  const tradeLabel = { spot: '現物', margin: '信用買い' };
   document.getElementById('importPreviewTable').innerHTML =
-    `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
+    `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>取引種別</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
     `<tbody>` + importRows.map((r, i) => {
       const nameCell = r.name
         ? r.name
         : r.duplicate
-          ? (stocks.find(s => s.ticker === r.ticker)?.name || '—')
+          ? (stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType)?.name || '—')
           : `<span class="importing-name">取得中...</span>`;
       return `
       <tr class="${r.duplicate ? 'skip' : ''}">
         <td>${r.ticker}</td>
         <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
         <td>${r.market}</td>
+        <td>${tradeLabel[r.tradeType] || r.tradeType}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
         <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
         <td class="${r.duplicate ? 'badge-skip' : 'badge-new'}">${r.duplicate ? '⚠ 既存' : '✓ 新規'}</td>
@@ -1570,11 +1597,11 @@ function executeImport() {
   if (!toAdd.length) { toast('追加できる銘柄がありません', 'error'); return; }
 
   toAdd.forEach(r => {
-    const yahooTicker = r.market === 'US' ? r.ticker : r.ticker + '.T';
-    const currency    = r.market === 'US' ? 'USD' : 'JPY';
+    const yahooTicker = getYahooTicker(r.ticker, r.market);
+    const currency    = getCurrency(r.market);
     stocks.push({
       id: uid(), ticker: r.ticker, yahooTicker, name: r.name,
-      market: r.market, sector: r.sector, currency,
+      market: r.market, tradeType: r.tradeType || 'spot', sector: r.sector, currency,
       quantity: r.quantity, avgPrice: r.avgPrice,
       currentPrice: r.avgPrice, prevClose: r.avgPrice,
       note: r.note, lastFetched: null, fetchError: null, _perKuchi: true,
