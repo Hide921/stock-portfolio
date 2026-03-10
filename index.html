@@ -294,6 +294,7 @@
     <div class="toolbar-left">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
       <button class="btn-ghost" onclick="openImportModal()">📋 インポート</button>
+      <button class="btn-ghost" onclick="exportCSV()">📤 エクスポート</button>
       <button class="btn-primary" onclick="openModal()">+ 銘柄追加</button>
     </div>
   </div>
@@ -1583,6 +1584,64 @@ function executeImport() {
   save(); render(); renderPieChart();
   document.getElementById('importOverlay').classList.remove('open');
   toast(`${toAdd.length} 件をインポートしました`, 'success');
+}
+
+// ── エクスポート ──────────────────────────────────────────────────
+function exportCSV() {
+  const headers = [
+    'ティッカー','銘柄名','市場','取引種別','セクター',
+    '保有数量','平均取得価格','現在価格','通貨',
+    '評価額(円換算)','含み損益(円換算)','損益率(%)',
+    '最終取得日時','メモ',
+  ];
+
+  const tradeLabel = { spot:'現物', margin:'信用買い' };
+  const marketLabel = { JP:'日本株', US:'米国株', FUND:'投資信託', CRYPTO:'暗号資産' };
+
+  const rows = stocks.map(s => {
+    const value   = s.currentPrice * s.quantity;
+    const cost    = s.avgPrice     * s.quantity;
+    const pl      = value - cost;
+    const plPct   = cost ? pl / cost * 100 : 0;
+    const valueJPY = toJPY(value, s.currency);
+    const plJPY   = toJPY(pl,    s.currency);
+    const qty     = s.market === 'FUND' ? s.quantity : s.quantity;
+    return [
+      s.ticker,
+      s.name,
+      marketLabel[s.market] || s.market,
+      tradeLabel[s.tradeType] || s.tradeType,
+      s.sector || '',
+      qty,
+      s.avgPrice,
+      s.currentPrice,
+      s.currency,
+      Math.round(valueJPY),
+      Math.round(plJPY),
+      plPct.toFixed(2),
+      s.lastFetched ? new Date(s.lastFetched).toLocaleString('ja-JP') : '',
+      s.note || '',
+    ];
+  });
+
+  const csv = [headers, ...rows]
+    .map(row => row.map(cell => {
+      const s = String(cell ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(','))
+    .join('\r\n');
+
+  // BOM付きUTF-8でExcelでも文字化けしない
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 10);
+  a.href     = url;
+  a.download = `portfolio_${date}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('CSVをエクスポートしました', 'success');
 }
 
 // ── トースト ──────────────────────────────────────────────────────
