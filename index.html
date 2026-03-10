@@ -1380,7 +1380,7 @@ function saveStock() {
     stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, note };
     toast('銘柄を更新しました', 'success');
   } else {
-    if (stocks.find(s => s.ticker === ticker && s.market === market)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
+    if (stocks.find(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
     stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
     toast(`${ticker} を追加しました`, 'success');
   }
