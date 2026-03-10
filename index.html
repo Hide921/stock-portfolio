@@ -1230,12 +1230,19 @@ async function autoFetchName(ticker, market) {
   hint.style.display = '';
   try {
     const yahooTicker = getYahooTicker(ticker, market);
-    const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return;
-    const d = await res.json();
-    if (d.name && !nameEl.value) nameEl.value = d.name;
+    let name = '';
+    if (isFundTicker(yahooTicker)) {
+      // 投資信託: サーバー経由 (Yahoo Finance Japan スクレイピング)
+      const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) { const d = await res.json(); name = d.name || ''; }
+    } else {
+      // 株式: Yahoo Finance US を yhFetch で直接取得 (高速)
+      const r = await yhFetch(yahooTicker, '?interval=1d&range=2d');
+      name = r.meta.shortName || r.meta.longName || '';
+    }
+    if (name && !nameEl.value) nameEl.value = name;
   } catch(e) {
   } finally {
     hint.style.display = 'none';
