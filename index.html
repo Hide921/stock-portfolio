@@ -438,9 +438,58 @@
 const CORS_PROXY = 'https://corsproxy.io/?url=';
 const YF_CHART   = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 
-// 8桁英数字+.T → 日本の投資信託コード (サーバーAPI経由で取得)
+// 8桁英数字+.T → 日本の投資信託コード
 function isFundTicker(ticker) {
   return /^[0-9A-Z]{8}\.T$/.test(ticker);
+}
+
+// ── Yahoo Finance Japan (CORSプロキシ経由・クライアントサイド) ──────
+const YF_JP_BASE = 'https://finance.yahoo.co.jp/quote/';
+
+function extractPreloadedState(html) {
+  for (const marker of ['window.__PRELOADED_STATE__ = ', 'window.__PRELOADED_STATE__=']) {
+    const idx = html.indexOf(marker);
+    if (idx < 0) continue;
+    const start = html.indexOf('{', idx + marker.length);
+    if (start < 0) continue;
+    let depth = 0, inStr = false, escape = false;
+    for (let i = start; i < html.length; i++) {
+      const c = html[i];
+      if (escape)           { escape = false; continue; }
+      if (c === '\\' && inStr) { escape = true; continue; }
+      if (c === '"')        { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { try { return JSON.parse(html.slice(start, i + 1)); } catch(e) { return null; } } }
+    }
+  }
+  return null;
+}
+
+async function fetchFundPage(fundCode) {
+  const url = YF_JP_BASE + encodeURIComponent(fundCode);
+  const res = await fetch(CORS_PROXY + encodeURIComponent(url), { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+async function getCurrentPriceFundJS(ticker) {
+  const fundCode = ticker.replace(/\.T$/, '');
+  const html  = await fetchFundPage(fundCode);
+  const state = extractPreloadedState(html);
+  if (!state) throw new Error('データ取得失敗');
+  const fp      = state.mainFundPriceBoard?.fundPrices || {};
+  const priceStr = fp.price || '';
+  if (!priceStr) throw new Error('基準価額なし');
+  const price  = parseFloat(priceStr.replace(/,/g, ''));
+  const change = parseFloat((fp.changePrice || '0').replace(/△/g, '-').replace(/,/g, '')) || 0;
+  return { price, prev_close: Math.round((price - change) * 10000) / 10000, currency: 'JPY' };
+}
+
+async function getFundNameJS(ticker) {
+  const html = await fetchFundPage(ticker.replace(/\.T$/, ''));
+  const m = html.match(/<title>\s*(.+?)(?:【|\[|\|)/);
+  return m ? m[1].trim() : '';
 }
 
 async function yhFetch(ticker, params = '') {
@@ -458,14 +507,20 @@ async function yhFetch(ticker, params = '') {
 }
 
 async function getCurrentPriceFund(ticker) {
-  const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) throw new Error(`サーバーエラー HTTP ${res.status}`);
-  const data = await res.json();
-  const d = data[ticker];
-  if (!d || d.error || !d.price) throw new Error(d?.error || '価格データなし');
-  return { price: d.price, prev_close: d.prev_close, currency: d.currency || 'JPY' };
+  // クライアントサイドで取得 (GitHub Pages でも動作)
+  try {
+    return await getCurrentPriceFundJS(ticker);
+  } catch(e) {
+    // ローカル Flask サーバー経由にフォールバック
+    const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`サーバーエラー HTTP ${res.status}`);
+    const data = await res.json();
+    const d = data[ticker];
+    if (!d || d.error || !d.price) throw new Error(d?.error || '価格データなし');
+    return { price: d.price, prev_close: d.prev_close, currency: d.currency || 'JPY' };
+  }
 }
 
 async function getCurrentPrice(ticker) {
@@ -482,12 +537,20 @@ async function getCurrentPrice(ticker) {
 }
 
 async function getHistoryFund(ticker, period) {
-  const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return data[ticker] || [];
+  try {
+    const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data[ticker] || [];
+  } catch(e) {
+    // サーバーなし(GitHub Pages)の場合は現在価格の1点のみ返す
+    try {
+      const d = await getCurrentPriceFundJS(ticker);
+      return [{ date: new Date().toISOString().slice(0, 10), close: d.price }];
+    } catch(e2) { return []; }
+  }
 }
 
 async function getHistory(ticker, period) {
@@ -1232,11 +1295,16 @@ async function autoFetchName(ticker, market) {
     const yahooTicker = getYahooTicker(ticker, market);
     let name = '';
     if (isFundTicker(yahooTicker)) {
-      // 投資信託: サーバー経由 (Yahoo Finance Japan スクレイピング)
-      const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (res.ok) { const d = await res.json(); name = d.name || ''; }
+      // 投資信託: まずクライアントサイドで取得 (GitHub Pages でも動作)
+      try {
+        name = await getFundNameJS(yahooTicker);
+      } catch(e) {
+        // ローカル Flask サーバー経由にフォールバック
+        const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) { const d = await res.json(); name = d.name || ''; }
+      }
     } else {
       // 株式: Yahoo Finance US を yhFetch で直接取得 (高速)
       const r = await yhFetch(yahooTicker, '?interval=1d&range=2d');
@@ -1434,8 +1502,12 @@ async function fetchImportNames() {
     pending.map(async ({ r, i }) => {
       const yahooTicker = r.market === 'US' ? r.ticker : r.ticker + '.T';
       try {
-        const result = await yhFetch(yahooTicker, '?interval=1d&range=2d');
-        r.name = result.meta.shortName || result.meta.longName || '';
+        if (isFundTicker(yahooTicker)) {
+          r.name = await getFundNameJS(yahooTicker);
+        } else {
+          const result = await yhFetch(yahooTicker, '?interval=1d&range=2d');
+          r.name = result.meta.shortName || result.meta.longName || '';
+        }
       } catch(e) {
         // 取得失敗は無視（名前なしのまま）
       }
