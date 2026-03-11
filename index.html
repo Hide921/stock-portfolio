@@ -181,6 +181,29 @@
       .form-group.full, .fund-note { grid-column: span 1; }
       .btn-sync span:last-child { display: none; }
     }
+    @media (max-width: 600px) {
+      /* Header: 2行レイアウト（タイトル縦折り返し防止） */
+      header { flex-wrap: wrap; padding: 10px 14px; gap: 4px 8px; }
+      header::after { content: ''; order: 5; flex: 0 0 100%; height: 0; }
+      header svg { order: 1; flex-shrink: 0; }
+      header h1 { order: 2; flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      header .btn-sync { order: 3; }
+      header .api-status { order: 6; }
+      header .last-updated { order: 7; margin-left: auto; }
+
+      /* Toolbar: 検索を1行に、ボタンテキスト折り返し防止 */
+      .toolbar { gap: 8px; }
+      .toolbar-left { flex-wrap: wrap; }
+      .search { flex: 1 1 100%; width: 100%; }
+      #marketFilter, #tradeFilter { flex: 1; min-width: 0; }
+      .btn-fetch, .btn-ghost, .btn-primary { white-space: nowrap; }
+
+      /* Table: 取得価格・損益率を非表示、横スクロール対応 */
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      td:nth-child(3), th:nth-child(3),
+      td:nth-child(7), th:nth-child(7) { display: none; }
+      td { white-space: normal; }
+    }
   </style>
 </head>
 <body>
