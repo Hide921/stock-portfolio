@@ -204,11 +204,31 @@
       #marketFilter, #tradeFilter { flex: 1; min-width: 0; }
       .btn-fetch, .btn-ghost, .btn-primary { white-space: nowrap; }
 
-      /* Table: 取得価格・損益率を非表示、横スクロール対応 */
-      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      td:nth-child(3), th:nth-child(3),
-      td:nth-child(7), th:nth-child(7) { display: none; }
-      td { white-space: normal; }
+      /* Table: カードレイアウトに変換 */
+      .table-wrap table { display: block; }
+      .table-wrap thead { display: none; }
+      .table-wrap tbody { display: block; }
+      .table-wrap tbody tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-areas: "ticker ticker" "price value" "pl actions";
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        gap: 6px 12px;
+        align-items: start;
+      }
+      .table-wrap td { display: block !important; padding: 0; border: none; white-space: normal; }
+      .table-wrap td:nth-child(1) { grid-area: ticker; }
+      .table-wrap td:nth-child(2) { display: none !important; }
+      .table-wrap td:nth-child(3) { display: none !important; }
+      .table-wrap td:nth-child(4) { grid-area: price; }
+      .table-wrap td:nth-child(5) { grid-area: value; }
+      .table-wrap td:nth-child(6) { grid-area: pl; }
+      .table-wrap td:nth-child(7) { display: none !important; }
+      .table-wrap td:nth-child(8) { grid-area: actions; justify-self: end; align-self: center; }
+      .table-wrap td:nth-child(4)::before { content: '現在価格'; display: block; font-size: 10px; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 2px; }
+      .table-wrap td:nth-child(5)::before { content: '評価額'; display: block; font-size: 10px; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 2px; }
+      .table-wrap td:nth-child(6)::before { content: '含み損益'; display: block; font-size: 10px; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 2px; }
     }
   </style>
 </head>
