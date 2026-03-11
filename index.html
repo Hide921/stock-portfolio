@@ -182,6 +182,12 @@
       .btn-sync span:last-child { display: none; }
     }
     @media (max-width: 600px) {
+      /* ページ全体の横スクロール防止 */
+      html, body { overflow-x: hidden; max-width: 100%; }
+      .charts-section { overflow: hidden; }
+      .chart-card { min-width: 0; overflow: hidden; }
+      canvas { max-width: 100% !important; }
+
       /* Header: 2行レイアウト（タイトル縦折り返し防止） */
       header { flex-wrap: wrap; padding: 10px 14px; gap: 4px 8px; }
       header::after { content: ''; order: 5; flex: 0 0 100%; height: 0; }
