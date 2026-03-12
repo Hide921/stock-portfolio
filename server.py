@@ -6,6 +6,7 @@ import math
 import logging
 import threading
 import webbrowser
+import concurrent.futures
 
 import time
 import requests as req
@@ -221,18 +222,26 @@ def get_prices():
     tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
     result  = {}
 
-    for ticker in tickers:
-        try:
-            if is_fund_ticker(ticker):
-                fund_code      = ticker[:-2]   # .T を除去
-                result[ticker] = get_fund_price_yfjp(fund_code)
-            else:
-                result[ticker] = fetch_price_with_retry(ticker)
-                logging.info(f'OK   {ticker}: {result[ticker]["price"]} ({result[ticker]["currency"]})')
+    def fetch_one(ticker):
+        if is_fund_ticker(ticker):
+            fund_code = ticker[:-2]
+            return ticker, get_fund_price_yfjp(fund_code)
+        else:
+            data = fetch_price_with_retry(ticker)
+            logging.info(f'OK   {ticker}: {data["price"]} ({data["currency"]})')
+            return ticker, data
 
-        except Exception as e:
-            logging.warning(f'ERR  {ticker}: {e}')
-            result[ticker] = {'price': None, 'prev_close': None, 'currency': None, 'error': str(e)}
+    # 並列取得 + 1銘柄あたり30秒タイムアウト
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as ex:
+        futures = {ex.submit(fetch_one, t): t for t in tickers}
+        for fut in concurrent.futures.as_completed(futures, timeout=60):
+            t = futures[fut]
+            try:
+                _, data = fut.result(timeout=30)
+                result[t] = data
+            except Exception as e:
+                logging.warning(f'ERR  {t}: {e}')
+                result[t] = {'price': None, 'prev_close': None, 'currency': None, 'error': str(e)}
 
     return jsonify(result)
 
