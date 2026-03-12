@@ -10,7 +10,7 @@ import concurrent.futures
 
 import time
 import requests as req
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 import yfinance as yf
 
@@ -21,9 +21,16 @@ def yf_ticker(ticker: str) -> yf.Ticker:
     return yf.Ticker(ticker)
 
 
-def fetch_price_with_retry(ticker: str, retries: int = 3) -> dict:
-    """fast_info で取得。レート制限時は指数バックオフで再試行し、
-    それでも失敗する場合は history() エンドポイントにフォールバック。"""
+def fetch_price_with_retry(ticker: str, retries: int = 2) -> dict:
+    """Chart API → yfinance fast_info の順で取得。
+    Chart API はレート制限を受けにくい直接エンドポイント。"""
+    # 1st: Yahoo Finance Chart API (最も信頼性が高い)
+    try:
+        return fetch_price_via_chart_api(ticker)
+    except Exception as e:
+        logging.debug(f'Chart API failed for {ticker}: {e}')
+
+    # 2nd: yfinance fast_info (バックアップ)
     last_err = None
     for attempt in range(retries):
         try:
@@ -41,25 +48,9 @@ def fetch_price_with_retry(ticker: str, retries: int = 3) -> dict:
         except Exception as e:
             last_err = e
             if 'Too Many Requests' in str(e) or 'Rate' in str(e):
-                time.sleep(2 ** attempt)   # 指数バックオフ: 1s, 2s, 4s
+                time.sleep(2 ** attempt)
             else:
                 break
-
-    # フォールバック: history() エンドポイントで再試行
-    try:
-        hist = yf_ticker(ticker).history(period='2d')
-        if not hist.empty:
-            price = safe_float(hist['Close'].iloc[-1])
-            prev  = safe_float(hist['Close'].iloc[-2]) if len(hist) > 1 else None
-            if price:
-                return {
-                    'price':      round(price, 4),
-                    'prev_close': round(prev, 4) if prev is not None else None,
-                    'currency':   'JPY' if ticker.endswith('.T') else 'USD',
-                    'error':      None,
-                }
-    except Exception:
-        pass
 
     raise last_err or ValueError('価格取得失敗')
 
@@ -92,6 +83,40 @@ _YF_JP_HEADERS = {
     'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 }
+
+_YF_API_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    ),
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+}
+
+def fetch_price_via_chart_api(ticker: str) -> dict:
+    """Yahoo Finance Chart API を直接叩いて現在価格を取得（yfinance 非依存）"""
+    import urllib.parse
+    url = f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=2d'
+    r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    result = data['chart']['result'][0]
+    meta   = result['meta']
+    price  = safe_float(meta.get('regularMarketPrice'))
+    prev   = safe_float(meta.get('chartPreviousClose') or meta.get('previousClose'))
+    if price is None:
+        closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+        price  = safe_float(next((c for c in reversed(closes) if c is not None), None))
+    if price is None:
+        raise ValueError('price is None')
+    currency = meta.get('currency') or ('JPY' if ticker.endswith('.T') else 'USD')
+    return {
+        'price':      round(price, 4),
+        'prev_close': round(prev, 4) if prev is not None else None,
+        'currency':   currency,
+        'error':      None,
+    }
 
 
 def _extract_preloaded_state(html: str) -> dict:
@@ -228,6 +253,26 @@ def index():
 @app.route('/api/health')
 def health():
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/proxy')
+def proxy():
+    """Yahoo Finance への CORSプロキシ。GitHub Pages (ブラウザ) から呼ばれる。
+    ブラウザは CORS 制約でYahoo Financeに直接アクセスできないため、
+    このサーバーが代わりに取得して返す。"""
+    url = request.args.get('url', '').strip()
+    if not url:
+        return jsonify({'error': 'url required'}), 400
+    # Yahoo Finance 以外への転送は禁止
+    if 'yahoo.com' not in url and 'yahoo.co.jp' not in url:
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
+        content_type = r.headers.get('Content-Type', 'application/json')
+        return Response(r.content, status=r.status_code, content_type=content_type)
+    except Exception as e:
+        logging.warning(f'PROXY ERR {url}: {e}')
+        return jsonify({'error': str(e)}), 502
 
 
 @app.route('/api/prices')

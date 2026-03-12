@@ -521,11 +521,12 @@ const API_BASE = (() => {
 })();
 
 // ── API (Yahoo Finance via CORS proxy) ────────────────────────────
-// 複数プロキシを順番に試すことで障害時でも動作継続
+// 1番目: 自前Renderサーバー（最優先・最安定）
+// 2番目以降: 外部CORSプロキシ（バックアップ）
 const CORS_PROXIES = [
+  `${API_BASE}/api/proxy?url=`,
   'https://api.allorigins.win/raw?url=',
   'https://api.codetabs.com/v1/proxy?quest=',
-  'https://corsproxy.io/?url=',
 ];
 let _proxyIdx = 0;
 const YF_CHART   = 'https://query2.finance.yahoo.com/v8/finance/chart/';
@@ -595,7 +596,8 @@ async function fetchViaProxy(url) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      if (text.includes('Upgrade at https://corsproxy.io')) throw new Error('paid plan');
+      // エラー応答を検出して次のプロキシへ
+      if (text.includes('Too Many Requests') || text.includes('Upgrade at https://corsproxy.io') || text.includes('Edge:')) throw new Error('proxy error');
       _proxyIdx = idx; // 成功したプロキシを優先
       return text;
     } catch(e) {
