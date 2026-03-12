@@ -7,10 +7,60 @@ import logging
 import threading
 import webbrowser
 
+import time
 import requests as req
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import yfinance as yf
+
+
+def yf_ticker(ticker: str) -> yf.Ticker:
+    """yfinance 0.2.x は curl_cffi セッションを内部管理するため
+    session パラメータは渡さず、ライブラリに任せる。"""
+    return yf.Ticker(ticker)
+
+
+def fetch_price_with_retry(ticker: str, retries: int = 3) -> dict:
+    """fast_info で取得。レート制限時は指数バックオフで再試行し、
+    それでも失敗する場合は history() エンドポイントにフォールバック。"""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            info  = yf_ticker(ticker).fast_info
+            price = safe_float(info.last_price)
+            prev  = safe_float(info.previous_close)
+            if price is None:
+                raise ValueError('price is None')
+            return {
+                'price':      round(price, 4),
+                'prev_close': round(prev, 4) if prev is not None else None,
+                'currency':   getattr(info, 'currency', None) or 'JPY',
+                'error':      None,
+            }
+        except Exception as e:
+            last_err = e
+            if 'Too Many Requests' in str(e) or 'Rate' in str(e):
+                time.sleep(2 ** attempt)   # 指数バックオフ: 1s, 2s, 4s
+            else:
+                break
+
+    # フォールバック: history() エンドポイントで再試行
+    try:
+        hist = yf_ticker(ticker).history(period='2d')
+        if not hist.empty:
+            price = safe_float(hist['Close'].iloc[-1])
+            prev  = safe_float(hist['Close'].iloc[-2]) if len(hist) > 1 else None
+            if price:
+                return {
+                    'price':      round(price, 4),
+                    'prev_close': round(prev, 4) if prev is not None else None,
+                    'currency':   'JPY' if ticker.endswith('.T') else 'USD',
+                    'error':      None,
+                }
+    except Exception:
+        pass
+
+    raise last_err or ValueError('価格取得失敗')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -177,20 +227,8 @@ def get_prices():
                 fund_code      = ticker[:-2]   # .T を除去
                 result[ticker] = get_fund_price_yfjp(fund_code)
             else:
-                info  = yf.Ticker(ticker).fast_info
-                price = safe_float(info.last_price)
-                prev  = safe_float(info.previous_close)
-
-                if price is None:
-                    raise ValueError('価格データが取得できませんでした')
-
-                result[ticker] = {
-                    'price':      round(price, 4),
-                    'prev_close': round(prev,  4) if prev is not None else None,
-                    'currency':   info.currency or 'JPY',
-                    'error':      None,
-                }
-                logging.info(f'OK   {ticker}: {price} ({info.currency})')
+                result[ticker] = fetch_price_with_retry(ticker)
+                logging.info(f'OK   {ticker}: {result[ticker]["price"]} ({result[ticker]["currency"]})')
 
         except Exception as e:
             logging.warning(f'ERR  {ticker}: {e}')
@@ -226,7 +264,7 @@ def get_history():
                 result[ticker] = data
                 logging.info(f'HIST FUND {ticker}: {len(data)} bars ({period})')
             else:
-                hist = yf.Ticker(ticker).history(period=period)
+                hist = yf_ticker(ticker).history(period=period)
                 if hist.empty:
                     raise ValueError('データなし')
 
@@ -267,7 +305,7 @@ def get_name():
             logging.info(f'NAME FUND {fund_code}: {name!r}')
             return jsonify({'name': name})
         else:
-            info = yf.Ticker(ticker).info
+            info = yf_ticker(ticker).info
             name = info.get('shortName') or info.get('longName') or ''
             logging.info(f'NAME {ticker}: {name!r}')
             return jsonify({'name': name})
@@ -280,7 +318,7 @@ def get_name():
 def get_usdjpy():
     """GET /api/usdjpy — 現在のUSD/JPYレートを返す"""
     try:
-        info = yf.Ticker('USDJPY=X').fast_info
+        info = yf_ticker('USDJPY=X').fast_info
         rate = safe_float(info.last_price)
         if rate is None:
             raise ValueError('レートデータなし')
