@@ -130,7 +130,7 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
         return []
 
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path='/static')
-CORS(app)
+CORS(app)  # 全オリジン許可（公開株価データのため問題なし）
 
 
 # ── Helpers ───────────────────────────────────────────────────────

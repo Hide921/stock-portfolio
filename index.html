@@ -510,6 +510,16 @@
 <div class="toast" id="toast"></div>
 
 <script>
+// ── バックエンドAPI設定 ────────────────────────────────────────────
+// Render.com などにデプロイした Flask サーバーの URL を設定する
+// ローカル実行時は自動的に同一オリジン (空文字) を使用
+const API_BASE = (() => {
+  const h = window.location.hostname;
+  if (h === 'localhost' || h === '127.0.0.1') return ''; // ローカル: 相対パス
+  // GitHub Pages などの本番環境: Render にデプロイした URL
+  return 'https://stock-portfolio-api-hide921.onrender.com';
+})();
+
 // ── API (Yahoo Finance via CORS proxy) ────────────────────────────
 // 複数プロキシを順番に試すことで障害時でも動作継続
 const CORS_PROXIES = [
@@ -611,7 +621,7 @@ async function getCurrentPriceFund(ticker) {
     return await getCurrentPriceFundJS(ticker);
   } catch(e) {
     // ローカル Flask サーバー経由にフォールバック
-    const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+    const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error(`サーバーエラー HTTP ${res.status}`);
@@ -627,7 +637,7 @@ async function getCurrentPrice(ticker) {
   if (isFundTicker(ticker)) return await getCurrentPriceFund(ticker);
   // ローカルサーバー経由を優先（CORS プロキシ不要）
   try {
-    const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+    const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
@@ -652,7 +662,7 @@ async function getCurrentPrice(ticker) {
 
 async function getHistoryFund(ticker, period) {
   try {
-    const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
+    const res = await fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -672,7 +682,7 @@ async function getHistory(ticker, period) {
   if (isFundTicker(ticker)) return await getHistoryFund(ticker, period);
   // ローカルサーバー経由を優先
   try {
-    const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
+    const res = await fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
       signal: AbortSignal.timeout(20000),
     });
     if (res.ok) {
@@ -1525,7 +1535,7 @@ async function autoFetchName(ticker, market) {
         name = await getFundNameJS(yahooTicker);
       } catch(e) {
         // ローカル Flask サーバー経由にフォールバック
-        const res = await fetch(`/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+        const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
           signal: AbortSignal.timeout(8000),
         });
         if (res.ok) { const d = await res.json(); name = d.name || ''; }
