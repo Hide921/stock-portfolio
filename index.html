@@ -621,40 +621,9 @@ async function yhFetch(ticker, params = '') {
   return result;
 }
 
-async function getCurrentPriceFund(ticker) {
-  // クライアントサイドで取得 (GitHub Pages でも動作)
-  try {
-    return await getCurrentPriceFundJS(ticker);
-  } catch(e) {
-    // ローカル Flask サーバー経由にフォールバック
-    const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`サーバーエラー HTTP ${res.status}`);
-    const data = await res.json();
-    const d = data[ticker];
-    if (!d || d.error || !d.price) throw new Error(d?.error || '価格データなし');
-    // サーバーも 円/万口 で返すので ÷10,000 して 円/口 に変換
-    return { price: d.price / 10000, prev_close: d.prev_close ? d.prev_close / 10000 : null, currency: d.currency || 'JPY' };
-  }
-}
-
-async function getCurrentPrice(ticker) {
-  if (isFundTicker(ticker)) return await getCurrentPriceFund(ticker);
-  // ローカルサーバー経由を優先（CORS プロキシ不要）
-  try {
-    const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
-      signal: AbortSignal.timeout(30000),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const d = data[ticker];
-      if (d && !d.error && d.price) {
-        return { price: d.price, prev_close: d.prev_close ?? null, currency: d.currency || 'JPY' };
-      }
-    }
-  } catch(e) { /* フォールバックへ */ }
-  // CORS プロキシ経由（フォールバック）
+// CORSプロキシ専用（Renderが失敗した場合のフォールバック）
+async function getCurrentPriceViaCors(ticker) {
+  if (isFundTicker(ticker)) return await getCurrentPriceFundJS(ticker);
   const r    = await yhFetch(ticker, '?interval=1d&range=2d');
   const meta = r.meta;
   const price = meta.regularMarketPrice ?? meta.postMarketPrice;
@@ -664,6 +633,48 @@ async function getCurrentPrice(ticker) {
     prev_close: meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? null,
     currency:   meta.currency || 'JPY',
   };
+}
+
+async function getCurrentPriceFund(ticker) {
+  // Render FIRST（投信もサーバー経由が高速）
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const d = data[ticker];
+        if (d && !d.error && d.price) {
+          // Renderは円/万口で返すので÷10,000して円/口に変換
+          return { price: d.price / 10000, prev_close: d.prev_close ? d.prev_close / 10000 : null, currency: d.currency || 'JPY' };
+        }
+      }
+    } catch(e) {}
+  }
+  // CORSプロキシにフォールバック
+  return await getCurrentPriceFundJS(ticker);
+}
+
+async function getCurrentPrice(ticker) {
+  if (isFundTicker(ticker)) return await getCurrentPriceFund(ticker);
+  // Render経由を優先
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const d = data[ticker];
+        if (d && !d.error && d.price) {
+          return { price: d.price, prev_close: d.prev_close ?? null, currency: d.currency || 'JPY' };
+        }
+      }
+    } catch(e) {}
+  }
+  // CORSプロキシにフォールバック
+  return await getCurrentPriceViaCors(ticker);
 }
 
 async function getHistoryFund(ticker, period) {
@@ -1182,16 +1193,40 @@ async function fetchAllPrices() {
   btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
   btn.disabled  = true;
 
-  // 全銘柄 + USDJPY を並列取得
+  // 全銘柄 + USDJPY を取得
   const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
-  const results    = await Promise.allSettled(
-    allTickers.map(t => getCurrentPrice(t).then(d => ({ ticker: t, ...d })))
-  );
+  const priceMap   = {};
 
-  const priceMap = {};
-  results.forEach(r => {
-    if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
-  });
+  // ── Step1: Renderに全銘柄を1回のバッチリクエスト（最速）──
+  if (API_BASE) {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
+        { signal: AbortSignal.timeout(25000) }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        Object.entries(data).forEach(([t, d]) => {
+          if (!d?.price) return;
+          // 投信はRenderが円/万口で返すので÷10,000して円/口に変換
+          const price = isFundTicker(t) ? d.price / 10000 : d.price;
+          const prev  = isFundTicker(t) && d.prev_close ? d.prev_close / 10000 : d.prev_close;
+          priceMap[t] = { ticker: t, price, prev_close: prev ?? null, currency: d.currency || 'JPY' };
+        });
+      }
+    } catch(e) {}
+  }
+
+  // ── Step2: 取得できなかった銘柄をCORSプロキシで並列補完 ──
+  const missing = allTickers.filter(t => !priceMap[t]?.price);
+  if (missing.length) {
+    const corsResults = await Promise.allSettled(
+      missing.map(t => getCurrentPriceViaCors(t).then(d => ({ ticker: t, ...d })))
+    );
+    corsResults.forEach(r => {
+      if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
+    });
+  }
 
   // USDJPY 更新
   if (priceMap['USDJPY=X']) {
