@@ -906,6 +906,8 @@ async function gistLoad(silent = false) {
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
     render();
     renderPieChart();
+    // Gistからデータ更新後にグラフも最新保有数量で再描画
+    if (historyData) renderLineChart();
     updateSyncIcon('ok');
     if (!silent) {
       toast('クラウドからデータを読み込みました ☁️', 'success');
