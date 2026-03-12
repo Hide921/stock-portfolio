@@ -605,6 +605,20 @@ async function getCurrentPriceFund(ticker) {
 
 async function getCurrentPrice(ticker) {
   if (isFundTicker(ticker)) return await getCurrentPriceFund(ticker);
+  // ローカルサーバー経由を優先（CORS プロキシ不要）
+  try {
+    const res = await fetch(`/api/prices?tickers=${encodeURIComponent(ticker)}`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const d = data[ticker];
+      if (d && !d.error && d.price) {
+        return { price: d.price, prev_close: d.prev_close ?? null, currency: d.currency || 'JPY' };
+      }
+    }
+  } catch(e) { /* フォールバックへ */ }
+  // CORS プロキシ経由（フォールバック）
   const r    = await yhFetch(ticker, '?interval=1d&range=2d');
   const meta = r.meta;
   const price = meta.regularMarketPrice ?? meta.postMarketPrice;
@@ -636,6 +650,17 @@ async function getHistoryFund(ticker, period) {
 
 async function getHistory(ticker, period) {
   if (isFundTicker(ticker)) return await getHistoryFund(ticker, period);
+  // ローカルサーバー経由を優先
+  try {
+    const res = await fetch(`/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data[ticker]?.length) return data[ticker];
+    }
+  } catch(e) { /* フォールバックへ */ }
+  // CORS プロキシ経由（フォールバック）
   const r          = await yhFetch(ticker, `?interval=1d&range=${period}`);
   const timestamps = r.timestamp || [];
   const closes     = r.indicators?.quote?.[0]?.close || [];
