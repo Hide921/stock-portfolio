@@ -1016,6 +1016,24 @@ if (syncCfg.pat && syncCfg.gistId) {
   setTimeout(() => gistLoad(true), 800);
 }
 
+// ── Price cache (API障害時のフォールバック) ─────────────────────────
+const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
+
+function savePriceCache(priceMap, rate) {
+  try {
+    localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ ts: Date.now(), prices: priceMap, rate }));
+  } catch(e) {}
+}
+
+function loadPriceCache() {
+  try { return JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || 'null'); } catch { return null; }
+}
+
+function cacheAgeText(ts) {
+  const min = Math.round((Date.now() - ts) / 60000);
+  return min < 60 ? min + '分前' : Math.round(min / 60) + '時間前';
+}
+
 // ── Persistence ───────────────────────────────────────────────────
 function save(skipSync = false) {
   localStorage.setItem('stocks', JSON.stringify(stocks));
@@ -1035,13 +1053,19 @@ async function checkAPI() {
     apiOnline = true;
     dot.style.background = 'var(--green)';
     label.textContent    = 'Yahoo Finance ✓';
-    // 初回接続時に自動取得
-    fetchAllPrices();
   } catch (e) {
     apiOnline = false;
-    dot.style.background = 'var(--red)';
-    label.textContent    = 'API接続エラー';
+    const cache = loadPriceCache();
+    if (cache) {
+      dot.style.background = 'var(--yellow)';
+      label.textContent    = `キャッシュ (${cacheAgeText(cache.ts)})`;
+    } else {
+      dot.style.background = 'var(--red)';
+      label.textContent    = 'API接続エラー';
+    }
   }
+  // 失敗時もfetchAllPricesを呼ぶ（キャッシュから価格を復元するため）
+  fetchAllPrices();
 }
 
 // ── 為替自動更新 ───────────────────────────────────────────────────
@@ -1104,16 +1128,25 @@ async function fetchAllPrices() {
 
   let updated = 0, failed = 0;
   const now = new Date().toISOString();
+  const cache = loadPriceCache();
+
   stocks = stocks.map(s => {
     const d = priceMap[s.yahooTicker];
     if (d?.price) {
       updated++;
       return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? s.prevClose, currency: d.currency || s.currency, lastFetched: now, fetchError: null };
-    } else {
-      failed++;
-      return { ...s, lastFetched: now, fetchError: '取得失敗' };
     }
+    // API失敗 → キャッシュから価格を復元（⚠を出さない）
+    const cached = cache?.prices?.[s.yahooTicker];
+    if (cached?.price) {
+      return { ...s, currentPrice: cached.price, prevClose: cached.prev_close ?? s.prevClose, fetchError: null };
+    }
+    failed++;
+    return { ...s, lastFetched: now, fetchError: '取得失敗' };
   });
+
+  // 成功分をキャッシュ保存
+  if (updated > 0) savePriceCache(priceMap, usdJpyRate);
 
   // API ステータス更新
   const dot = document.getElementById('apiDot');
@@ -1121,6 +1154,11 @@ async function fetchAllPrices() {
     apiOnline = true;
     dot.style.background = 'var(--green)';
     document.getElementById('apiLabel').textContent = 'Yahoo Finance ✓';
+  } else if (cache) {
+    // キャッシュ使用中 — エラー扱いしない
+    dot.style.background = 'var(--yellow)';
+    document.getElementById('apiLabel').textContent = `キャッシュ (${cacheAgeText(cache.ts)})`;
+    failed = 0;
   } else {
     apiOnline = false;
     dot.style.background = 'var(--red)';
