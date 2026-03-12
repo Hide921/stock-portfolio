@@ -298,6 +298,105 @@ def data_store():
             return jsonify({'error': str(e)}), 502
 
 
+@app.route('/api/snapshot')
+def take_snapshot():
+    """日次スナップショット: ポートフォリオの現在価値をGistのログに自動記録。
+    cron-job.org などから毎日1回呼び出すことで、
+    ユーザーがアプリを開かない日も推移グラフにデータが蓄積される。
+    """
+    from datetime import date as _date
+
+    pat     = os.environ.get('GITHUB_PAT', '')
+    gist_id = os.environ.get('GIST_ID', '')
+    if not pat or not gist_id:
+        return jsonify({'error': 'GITHUB_PAT / GIST_ID が未設定'}), 503
+
+    gist_headers_map = {
+        'Authorization': f'token {pat}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+    }
+    gist_url = f'https://api.github.com/gists/{gist_id}'
+
+    # ── 1. Gistからポートフォリオデータを取得 ──
+    try:
+        r = req.get(gist_url, headers=gist_headers_map, timeout=10)
+        r.raise_for_status()
+        content = r.json()['files']['portfolio.json']['content']
+        payload = json.loads(content)
+    except Exception as e:
+        return jsonify({'error': f'Gist読込失敗: {e}'}), 502
+
+    stocks_data = payload if isinstance(payload, list) else payload.get('stocks', [])
+    log         = [] if isinstance(payload, list) else payload.get('log', [])
+
+    if not stocks_data:
+        return jsonify({'error': 'ポートフォリオが空です'}), 400
+
+    # ── 2. 全銘柄の価格を並列取得 ──
+    tickers = list({s['yahooTicker'] for s in stocks_data if s.get('yahooTicker')})
+    prices  = {}
+
+    def _fetch(t):
+        if is_fund_ticker(t):
+            d = get_fund_price_yfjp(t[:-2])
+        else:
+            d = fetch_price_with_retry(t)
+        return t, d
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_fetch, t): t for t in tickers + ['USDJPY=X']}
+        for fut in concurrent.futures.as_completed(futs, timeout=90):
+            t = futs[fut]
+            try:
+                _, d = fut.result(timeout=30)
+                prices[t] = d
+            except Exception as e:
+                logging.warning(f'SNAPSHOT price err {t}: {e}')
+
+    # ── 3. 円換算合計（現物のみ）を計算 ──
+    usdjpy = safe_float((prices.get('USDJPY=X') or {}).get('price')) or 150.0
+    total  = 0.0
+    for s in stocks_data:
+        if s.get('tradeType') == 'margin':
+            continue
+        t = s.get('yahooTicker', '')
+        p = prices.get(t)
+        if not p or not p.get('price'):
+            continue
+        price    = p['price'] / 10000 if is_fund_ticker(t) else p['price']
+        qty      = float(s.get('quantity', 0))
+        currency = p.get('currency', 'JPY')
+        total   += price * qty * usdjpy if currency == 'USD' else price * qty
+
+    if total <= 0:
+        return jsonify({'error': '有効な価格データなし'}), 500
+
+    # ── 4. ログに今日の値を記録（1日1エントリ・上書き）──
+    today = _date.today().isoformat()
+    entry = {'date': today, 'value': round(total)}
+    idx   = next((i for i, e in enumerate(log) if e['date'] == today), -1)
+    if idx >= 0:
+        log[idx] = entry
+    else:
+        log.append(entry)
+    log.sort(key=lambda e: e['date'])
+    if len(log) > 730:
+        log = log[-730:]
+
+    # ── 5. Gistに保存 ──
+    new_payload = {'stocks': stocks_data, 'log': log}
+    try:
+        r = req.patch(gist_url, headers=gist_headers_map, timeout=10,
+                      json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
+        r.raise_for_status()
+    except Exception as e:
+        return jsonify({'error': f'Gist保存失敗: {e}'}), 502
+
+    logging.info(f'SNAPSHOT {today}: ¥{round(total):,} (log={len(log)}件)')
+    return jsonify({'ok': True, 'date': today, 'value': round(total), 'log_count': len(log)})
+
+
 @app.route('/api/proxy')
 def proxy():
     """Yahoo Finance への CORSプロキシ。GitHub Pages (ブラウザ) から呼ばれる。
