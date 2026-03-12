@@ -521,10 +521,14 @@ const API_BASE = (() => {
 })();
 
 // ── API (Yahoo Finance via CORS proxy) ────────────────────────────
-// 1番目: 自前Renderサーバー（最優先・最安定）
-// 2番目以降: 外部CORSプロキシ（バックアップ）
+// fetchViaProxy 用: Render proxy を最優先、外部プロキシをバックアップ
 const CORS_PROXIES = [
   `${API_BASE}/api/proxy?url=`,
+  'https://api.allorigins.win/raw?url=',
+  'https://api.codetabs.com/v1/proxy?quest=',
+];
+// getHistoryViaCors 専用: Render /api/history と並列実行するため外部プロキシのみ
+const EXT_PROXIES = [
   'https://api.allorigins.win/raw?url=',
   'https://api.codetabs.com/v1/proxy?quest=',
 ];
@@ -681,12 +685,26 @@ async function getHistoryFund(ticker, period) {
 }
 
 async function getHistoryViaCors(ticker, period) {
-  const r      = await yhFetch(ticker, `?interval=1d&range=${period}`);
-  const ts     = r.timestamp || [];
-  const closes = r.indicators?.quote?.[0]?.close || [];
-  return ts
-    .map((t, i) => ({ date: new Date(t * 1000).toISOString().slice(0, 10), close: closes[i] }))
-    .filter(d => d.close != null && !isNaN(d.close));
+  // Render /api/history と並列実行されるため、外部プロキシのみ使用（Render重複を避ける）
+  const raw = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1d&range=${period}`;
+  let lastErr;
+  for (let i = 0; i < EXT_PROXIES.length; i++) {
+    try {
+      const res  = await fetch(EXT_PROXIES[i] + encodeURIComponent(raw), { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (text.includes('Too Many Requests') || text.includes('Edge:')) throw new Error('proxy error');
+      const json = JSON.parse(text);
+      const result = json.chart?.result?.[0];
+      if (!result) throw new Error('データなし');
+      const ts     = result.timestamp || [];
+      const closes = result.indicators?.quote?.[0]?.close || [];
+      return ts
+        .map((t, idx) => ({ date: new Date(t * 1000).toISOString().slice(0, 10), close: closes[idx] }))
+        .filter(d => d.close != null && !isNaN(d.close));
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr;
 }
 
 async function getHistory(ticker, period) {
@@ -811,48 +829,80 @@ function gistHeaders() {
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
-  if (!syncCfg.pat || !syncCfg.gistId) return;
+  // RenderまたはGist どちらかあれば保存
+  if (!API_BASE && (!syncCfg.pat || !syncCfg.gistId)) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => gistSave(true), 2000);
 }
 
 async function gistSave(silent = false) {
-  if (!syncCfg.pat || !syncCfg.gistId || isSyncing) return;
+  if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
-  try {
-    const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
-      method: 'PATCH',
-      headers: gistHeaders(),
-      body: JSON.stringify({
-        files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } },
-      }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    updateSyncIcon('ok');
-    if (!silent) toast('クラウドに保存しました ☁️', 'success');
-  } catch(e) {
-    updateSyncIcon('error');
-    if (!silent) toast('クラウド保存失敗: ' + e.message, 'error');
-  } finally {
-    isSyncing = false;
+  let saved = false;
+
+  // ① Render /api/data（サーバー側でGistを管理・PATは環境変数）
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}/api/data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stocks),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) saved = true;
+    } catch(e) {}
   }
+
+  // ② 直接Gist（バックアップ / Render未設定時）
+  if (!saved && syncCfg.pat && syncCfg.gistId) {
+    try {
+      const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
+        method: 'PATCH',
+        headers: gistHeaders(),
+        body: JSON.stringify({ files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } } }),
+      });
+      if (res.ok) saved = true;
+    } catch(e) {}
+  }
+
+  updateSyncIcon(saved ? 'ok' : 'error');
+  if (!silent) toast(saved ? 'クラウドに保存しました ☁️' : 'クラウド保存失敗', saved ? 'success' : 'error');
+  isSyncing = false;
 }
 
 async function gistLoad(silent = false) {
-  if (!syncCfg.pat || !syncCfg.gistId) return;
+  if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
-  try {
-    const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const gist    = await res.json();
-    const content = gist.files['portfolio.json']?.content;
-    if (!content) throw new Error('データファイルなし');
-    const data = JSON.parse(content);
-    if (!Array.isArray(data)) throw new Error('データ形式エラー');
+  let data = null;
+
+  // ① Render /api/data（サーバー側でGistを管理）
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}/api/data`, { signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json)) data = json;
+      }
+    } catch(e) {}
+  }
+
+  // ② 直接Gist（バックアップ / Render未設定時）
+  if (!data && syncCfg.pat && syncCfg.gistId) {
+    try {
+      const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
+      if (res.ok) {
+        const gist    = await res.json();
+        const content = gist.files['portfolio.json']?.content;
+        if (content) { const p = JSON.parse(content); if (Array.isArray(p)) data = p; }
+      }
+    } catch(e) {}
+  }
+
+  if (data) {
     stocks = data.map(migrateStock);
-    localStorage.setItem('stocks', JSON.stringify(stocks)); // syncなしで保存
+    localStorage.setItem('stocks', JSON.stringify(stocks));
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
     render();
     renderPieChart();
@@ -861,13 +911,12 @@ async function gistLoad(silent = false) {
       toast('クラウドからデータを読み込みました ☁️', 'success');
       showSyncStatus('success', `✓ ${data.length}件のデータを読み込みました`);
     }
-  } catch(e) {
+  } else {
     updateSyncIcon('error');
-    if (!silent) showSyncStatus('error', '読込失敗: ' + e.message);
-    else console.warn('Gist load:', e.message);
-  } finally {
-    isSyncing = false;
+    if (!silent) showSyncStatus('error', '読込失敗');
+    else console.warn('Sync load: failed');
   }
+  isSyncing = false;
 }
 
 function togglePATVisibility() {
@@ -1031,8 +1080,9 @@ if (API_BASE) {
   }, 10 * 60 * 1000);
 }
 
-// 起動時にGistからデータを読み込む（設定済みの場合）
-if (syncCfg.pat && syncCfg.gistId) {
+// 起動時にクラウドからデータを読み込む
+// Render /api/data（優先）または直接Gist（バックアップ）どちらかあれば実行
+if (API_BASE || (syncCfg.pat && syncCfg.gistId)) {
   updateSyncIcon('syncing');
   setTimeout(() => gistLoad(true), 800);
 }

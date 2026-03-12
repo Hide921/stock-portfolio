@@ -255,6 +255,49 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/api/data', methods=['GET', 'POST'])
+def data_store():
+    """ポートフォリオデータの保存・読込。
+    GitHub Gist をサーバー側で管理（PAT は Render 環境変数に設定）。
+    GET  → Gist からデータを取得して返す
+    POST → 受け取ったデータを Gist に保存
+    環境変数: GITHUB_PAT, GIST_ID
+    """
+    pat     = os.environ.get('GITHUB_PAT', '')
+    gist_id = os.environ.get('GIST_ID', '')
+
+    if not pat or not gist_id:
+        return jsonify({'error': 'GITHUB_PAT / GIST_ID が未設定です'}), 503
+
+    gist_url = f'https://api.github.com/gists/{gist_id}'
+    headers  = {
+        'Authorization': f'token {pat}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+    }
+
+    if request.method == 'GET':
+        try:
+            r = req.get(gist_url, headers=headers, timeout=10)
+            r.raise_for_status()
+            content = r.json()['files'].get('portfolio.json', {}).get('content', '[]')
+            return Response(content, content_type='application/json')
+        except Exception as e:
+            logging.warning(f'DATA GET ERR: {e}')
+            return jsonify({'error': str(e)}), 502
+
+    else:  # POST
+        try:
+            body = request.get_json(force=True)
+            r = req.patch(gist_url, headers=headers, timeout=10,
+                          json={'files': {'portfolio.json': {'content': json.dumps(body, ensure_ascii=False)}}})
+            r.raise_for_status()
+            return jsonify({'ok': True})
+        except Exception as e:
+            logging.warning(f'DATA POST ERR: {e}')
+            return jsonify({'error': str(e)}), 502
+
+
 @app.route('/api/proxy')
 def proxy():
     """Yahoo Finance への CORSプロキシ。GitHub Pages (ブラウザ) から呼ばれる。
