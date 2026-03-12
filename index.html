@@ -528,7 +528,7 @@ const CORS_PROXIES = [
   'https://corsproxy.io/?url=',
 ];
 let _proxyIdx = 0;
-const YF_CHART   = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+const YF_CHART   = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 
 // 8桁英数字+.T → 日本の投資信託コード
 function isFundTicker(ticker) {
@@ -638,7 +638,7 @@ async function getCurrentPrice(ticker) {
   // ローカルサーバー経由を優先（CORS プロキシ不要）
   try {
     const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(30000),
     });
     if (res.ok) {
       const data = await res.json();
@@ -1019,6 +1019,13 @@ if (!raw.length) save(true);
 render();
 renderPieChart();
 checkAPI();  // バックグラウンドで接続テスト → 成功時に価格+履歴を自動取得
+
+// Render バックエンドをスリープさせないよう10分ごとにping
+if (API_BASE) {
+  setInterval(() => {
+    fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000) }).catch(() => {});
+  }, 10 * 60 * 1000);
+}
 
 // 起動時にGistからデータを読み込む（設定済みの場合）
 if (syncCfg.pat && syncCfg.gistId) {
