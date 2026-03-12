@@ -324,7 +324,7 @@
         <canvas id="lineCanvas" style="display:none"></canvas>
         <div class="chart-placeholder" id="linePlaceholder">
           <span>📈</span>
-          <span>「価格を自動取得」を押すと<br>推移グラフが表示されます</span>
+          <span>「価格を自動取得」のたびに<br>終値を記録してグラフを蓄積します</span>
         </div>
       </div>
     </div>
@@ -757,6 +757,7 @@ let historyData      = null;
 const historyCache   = {};  // 期間別キャッシュ { '1mo': { ticker: [...] } }
 let pieChart         = null;
 let lineChart        = null;
+let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
 
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -782,6 +783,31 @@ function fmtPL(pl, cur)  { return (pl >= 0 ? '+' : '-') + fmtPrice(Math.abs(pl),
 function pctStr(p)        { return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; }
 function plClass(n)       { return n > 0 ? 'profit' : n < 0 ? 'loss' : 'neutral'; }
 function esc(s)           { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── 日次ログ ──────────────────────────────────────────────────────
+function calcSpotTotalJPY() {
+  return stocks
+    .filter(s => s.tradeType !== 'margin' && s.currentPrice)
+    .reduce((sum, s) => sum + toJPY(s.currentPrice * s.quantity, s.currency), 0);
+}
+
+function recordDailyLog() {
+  const value = Math.round(calcSpotTotalJPY());
+  if (!value) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const idx = portfolioLog.findIndex(e => e.date === today);
+  if (idx >= 0) portfolioLog[idx].value = value;
+  else portfolioLog.push({ date: today, value });
+  portfolioLog.sort((a, b) => a.date.localeCompare(b.date));
+  if (portfolioLog.length > 730) portfolioLog = portfolioLog.slice(-730); // 2年分保持
+}
+
+function periodCutoffDate(period) {
+  const days = { '5d': 5, '1mo': 31, '3mo': 92, '6mo': 183, '1y': 366, '2y': 732 };
+  const d = new Date();
+  d.setDate(d.getDate() - (days[period] || 31));
+  return d.toISOString().slice(0, 10);
+}
 
 // ── Migration ─────────────────────────────────────────────────────
 function migrateStock(s) {
@@ -852,13 +878,15 @@ async function gistSave(silent = false) {
   updateSyncIcon('syncing');
   let saved = false;
 
+  const savePayload = { stocks, log: portfolioLog };
+
   // ① Render /api/data（サーバー側でGistを管理・PATは環境変数）
   if (API_BASE) {
     try {
       const res = await fetch(`${API_BASE}/api/data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stocks),
+        body: JSON.stringify(savePayload),
         signal: AbortSignal.timeout(15000),
       });
       if (res.ok) saved = true;
@@ -871,7 +899,7 @@ async function gistSave(silent = false) {
       const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
         method: 'PATCH',
         headers: gistHeaders(),
-        body: JSON.stringify({ files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } } }),
+        body: JSON.stringify({ files: { 'portfolio.json': { content: JSON.stringify(savePayload, null, 2) } } }),
       });
       if (res.ok) saved = true;
     } catch(e) {}
@@ -888,13 +916,19 @@ async function gistLoad(silent = false) {
   updateSyncIcon('syncing');
   let data = null;
 
+  // ペイロードをパース（新形式: {stocks,log} / 旧形式: 配列）
+  function parsePayload(json) {
+    if (Array.isArray(json)) return { stocks: json, log: [] };
+    return { stocks: json.stocks || [], log: json.log || [] };
+  }
+
   // ① Render /api/data（サーバー側でGistを管理）
   if (API_BASE) {
     try {
       const res = await fetch(`${API_BASE}/api/data`, { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
         const json = await res.json();
-        if (Array.isArray(json)) data = json;
+        data = parsePayload(json);
       }
     } catch(e) {}
   }
@@ -906,23 +940,23 @@ async function gistLoad(silent = false) {
       if (res.ok) {
         const gist    = await res.json();
         const content = gist.files['portfolio.json']?.content;
-        if (content) { const p = JSON.parse(content); if (Array.isArray(p)) data = p; }
+        if (content) data = parsePayload(JSON.parse(content));
       }
     } catch(e) {}
   }
 
   if (data) {
-    stocks = data.map(migrateStock);
+    stocks       = data.stocks.map(migrateStock);
+    portfolioLog = data.log;
     localStorage.setItem('stocks', JSON.stringify(stocks));
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
     render();
     renderPieChart();
-    // Gistからデータ更新後にグラフも最新保有数量で再描画
-    if (historyData) renderLineChart();
+    renderLineChart();  // ログ更新後に即時再描画
     updateSyncIcon('ok');
     if (!silent) {
       toast('クラウドからデータを読み込みました ☁️', 'success');
-      showSyncStatus('success', `✓ ${data.length}件のデータを読み込みました`);
+      showSyncStatus('success', `✓ ${data.stocks.length}件のデータを読み込みました`);
     }
   } else {
     updateSyncIcon('error');
@@ -1275,12 +1309,16 @@ async function fetchAllPrices() {
     document.getElementById('apiLabel').textContent = 'API接続エラー';
   }
 
+  // 価格取得成功時のみ日次ログを記録・保存
+  if (updated > 0) {
+    recordDailyLog();
+    gistSave(true); // サイレント保存（ログをGistに同期）
+  }
+
   save();
   render();
   renderPieChart();
-  // 価格更新後はキャッシュを破棄して最新履歴を再取得
-  delete historyCache[currentPeriod];
-  fetchHistory(currentPeriod);
+  renderLineChart(); // ログベースで即時描画
 
   toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
         failed > 0 ? 'error' : 'success');
@@ -1290,98 +1328,41 @@ async function fetchAllPrices() {
   btn.disabled  = false;
 }
 
-// ── 履歴取得 ──────────────────────────────────────────────────────
-async function fetchHistory(period) {
+// ── 期間ボタン（同期・即時） ─────────────────────────────────────
+function fetchHistory(period) {
   currentPeriod = period;
-  document.querySelectorAll('.period-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.period === period);
-    b.disabled = true;
-  });
-
-  // キャッシュ済みならすぐ描画
-  if (historyCache[period]) {
-    historyData = historyCache[period];
-    renderLineChart();
-    document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
-    return;
-  }
-
-  const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
-  const stockTickers = allTickers.filter(t => !isFundTicker(t));
-  const fundTickers  = allTickers.filter(t => isFundTicker(t));
-  let fetched = {};
-
-  // ① Renderに全ティッカーを一括リクエスト（1回の通信で完結）
-  if (API_BASE) {
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/history?tickers=${encodeURIComponent(stockTickers.join(','))}&period=${period}`,
-        { signal: AbortSignal.timeout(20000) }
-      );
-      if (res.ok) fetched = await res.json();
-    } catch(e) {}
-  }
-
-  // ② Renderで取得できなかった株式ティッカーを外部プロキシで補完（並列）
-  const missing = stockTickers.filter(t => !fetched[t]?.length);
-  const fallbacks = await Promise.allSettled([
-    ...missing.map(t => getHistoryViaCors(t, period).then(d => ({ [t]: d }))),
-    ...fundTickers.map(t => getHistoryFund(t, period).then(d => ({ [t]: d }))),
-  ]);
-  fallbacks.filter(r => r.status === 'fulfilled').forEach(r => Object.assign(fetched, r.value));
-
-  historyData = fetched;
-  historyCache[period] = fetched;
+  document.querySelectorAll('.period-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.period === period));
   renderLineChart();
-
-  document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
 }
 
-// ── 推移グラフ ─────────────────────────────────────────────────────
+// ── 推移グラフ（日次ログベース）─────────────────────────────────
 function renderLineChart() {
-  if (!historyData) return;
+  const canvas      = document.getElementById('lineCanvas');
+  const placeholder = document.getElementById('linePlaceholder');
+  const statsEl     = document.getElementById('lineStats');
 
-  const usdJpyMap = {};
-  (historyData['USDJPY=X'] || []).forEach(d => usdJpyMap[d.date] = d.close);
+  const cutoff = periodCutoffDate(currentPeriod);
+  const points = portfolioLog
+    .filter(e => e.date >= cutoff && e.value > 0)
+    .map(e => ({ date: e.date, value: e.value }));
 
-  const spotStocks = stocks.filter(s => s.tradeType !== 'margin');
-
-  // 日付軸は全銘柄（信用含む）から生成してグラフ範囲を保つ
-  const dateSet = new Set();
-  stocks.forEach(s => (historyData[s.yahooTicker] || []).forEach(d => dateSet.add(d.date)));
-  const dates = [...dateSet].sort();
-  if (!dates.length) return;
-
-  function getLastKnown(arr, target) {
-    if (!arr.length) return null;
-    // 期間開始より前のデータしかない銘柄は最古値で補完（backward fill）
-    if (arr[0].date > target) return arr[0].close;
-    let last = null;
-    for (const item of arr) { if (item.date <= target) last = item.close; else break; }
-    return last;
+  if (points.length < 2) {
+    if (lineChart) { lineChart.destroy(); lineChart = null; }
+    canvas.style.display = 'none';
+    placeholder.style.display = 'flex';
+    statsEl.style.display = 'none';
+    return;
   }
-
-  const points = dates.map(date => {
-    let total = 0;
-    for (const s of spotStocks) {
-      const price = getLastKnown(historyData[s.yahooTicker] || [], date);
-      if (price == null) continue;
-      const rate = usdJpyMap[date] || usdJpyRate;
-      total += s.currency === 'USD' ? price * s.quantity * rate : price * s.quantity;
-    }
-    return { date, value: total > 0 ? Math.round(total) : null };
-  }).filter(p => p.value);
-
-  if (!points.length) return;
 
   const first = points[0].value, last = points[points.length - 1].value;
   const diff  = last - first;
   const pct   = diff / first * 100;
   const color = diff >= 0 ? '#22c55e' : '#ef4444';
 
-  document.getElementById('lineStats').style.display = 'flex';
+  statsEl.style.display = 'flex';
   const plEl  = document.getElementById('linePL');
-  plEl.textContent = (diff >= 0 ? '+' : '-') + fmtJPY(diff);
+  plEl.textContent = (diff >= 0 ? '+' : '') + (diff >= 0 ? '' : '-') + fmtJPY(diff);
   plEl.style.color = color;
   const pctEl = document.getElementById('linePLPct');
   pctEl.textContent = pctStr(pct);
@@ -1389,14 +1370,12 @@ function renderLineChart() {
 
   const labels = points.map(p => {
     const [y, m, d] = p.date.split('-');
-    return ['1y','2y','5y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
+    return ['1y','2y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
   });
 
   if (lineChart) lineChart.destroy();
-
-  const canvas = document.getElementById('lineCanvas');
   canvas.style.display = 'block';
-  document.getElementById('linePlaceholder').style.display = 'none';
+  placeholder.style.display = 'none';
 
   lineChart = new Chart(canvas.getContext('2d'), {
     type: 'line',
@@ -1409,7 +1388,7 @@ function renderLineChart() {
         borderWidth: 2,
         fill: true,
         tension: 0.3,
-        pointRadius: 0,
+        pointRadius: points.length <= 31 ? 3 : 0,
         pointHoverRadius: 5,
         pointHoverBackgroundColor: color,
       }],
