@@ -1214,8 +1214,10 @@ function renderLineChart() {
   const usdJpyMap = {};
   (historyData['USDJPY=X'] || []).forEach(d => usdJpyMap[d.date] = d.close);
 
+  const spotStocks = stocks.filter(s => s.tradeType !== 'margin');
+
   const dateSet = new Set();
-  stocks.forEach(s => (historyData[s.yahooTicker] || []).forEach(d => dateSet.add(d.date)));
+  spotStocks.forEach(s => (historyData[s.yahooTicker] || []).forEach(d => dateSet.add(d.date)));
   const dates = [...dateSet].sort();
   if (!dates.length) return;
 
@@ -1230,7 +1232,7 @@ function renderLineChart() {
 
   const points = dates.map(date => {
     let total = 0;
-    for (const s of stocks) {
+    for (const s of spotStocks) {
       const price = getLastKnown(historyData[s.yahooTicker] || [], date);
       if (price == null) continue;
       const rate = usdJpyMap[date] || usdJpyRate;
