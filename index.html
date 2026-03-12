@@ -365,6 +365,7 @@
           <th onclick="sortBy('avgPrice')">取得価格 <span id="sort-avgPrice">↕</span></th>
           <th onclick="sortBy('currentPrice')">現在価格 <span id="sort-currentPrice">↕</span></th>
           <th onclick="sortBy('value')">評価額 <span id="sort-value">↕</span></th>
+          <th onclick="sortBy('dayPL')">本日損益 <span id="sort-dayPL">↕</span></th>
           <th onclick="sortBy('pl')">含み損益 <span id="sort-pl">↕</span></th>
           <th onclick="sortBy('plPct')">損益率 <span id="sort-plPct">↕</span></th>
           <th>操作</th>
@@ -1476,6 +1477,7 @@ function render() {
       case 'avgPrice':     va = toJPY(a.avgPrice,     a.currency); vb = toJPY(b.avgPrice,     b.currency); break;
       case 'currentPrice': va = toJPY(a.currentPrice, a.currency); vb = toJPY(b.currentPrice, b.currency); break;
       case 'value':        va = toJPY(a.currentPrice * a.quantity, a.currency); vb = toJPY(b.currentPrice * b.quantity, b.currency); break;
+      case 'dayPL':        va = a.prevClose ? toJPY((a.currentPrice-a.prevClose)*a.quantity, a.currency) : -Infinity; vb = b.prevClose ? toJPY((b.currentPrice-b.prevClose)*b.quantity, b.currency) : -Infinity; break;
       case 'pl':           va = toJPY((a.currentPrice-a.avgPrice)*a.quantity, a.currency); vb = toJPY((b.currentPrice-b.avgPrice)*b.quantity, b.currency); break;
       case 'plPct':        va = (a.currentPrice-a.avgPrice)/a.avgPrice; vb = (b.currentPrice-b.avgPrice)/b.avgPrice; break;
       default:             va = 0; vb = 0;
@@ -1543,7 +1545,8 @@ function render() {
     const value  = s.currentPrice * s.quantity;
     const pl     = value - s.avgPrice * s.quantity;
     const plPct  = s.avgPrice ? pl / (s.avgPrice * s.quantity) * 100 : 0;
-    const dayChg = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
+    const dayChg  = s.prevClose ? (s.currentPrice - s.prevClose) / s.prevClose * 100 : null;
+    const dayPLraw = s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : null;
     const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
     const mLabel = s.market === 'FUND' ? '投信' : s.market === 'CRYPTO' ? 'BTC' : s.market;
     const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
@@ -1558,6 +1561,7 @@ function render() {
       <td>${fmtPrice(s.avgPrice, s.currency)}</td>
       <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}</td>
       <td>${fmtPrice(value, s.currency)}</td>
+      <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
       <td class="${plClass(pl)}">${fmtPL(pl, s.currency)}</td>
       <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
       <td><div class="actions">
@@ -1567,7 +1571,7 @@ function render() {
     </tr>`;
   }).join('');
 
-  ['ticker','quantity','avgPrice','currentPrice','value','pl','plPct'].forEach(k => {
+  ['ticker','quantity','avgPrice','currentPrice','value','dayPL','pl','plPct'].forEach(k => {
     const el = document.getElementById('sort-'+k);
     if (el) el.textContent = sortKey === k ? (sortDir > 0 ? '↑' : '↓') : '↕';
   });
