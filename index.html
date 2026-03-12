@@ -511,7 +511,13 @@
 
 <script>
 // ── API (Yahoo Finance via CORS proxy) ────────────────────────────
-const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+// 複数プロキシを順番に試すことで障害時でも動作継続
+const CORS_PROXIES = [
+  'https://api.allorigins.win/raw?url=',
+  'https://api.codetabs.com/v1/proxy?quest=',
+  'https://corsproxy.io/?url=',
+];
+let _proxyIdx = 0;
 const YF_CHART   = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 
 // 8桁英数字+.T → 日本の投資信託コード
@@ -544,9 +550,7 @@ function extractPreloadedState(html) {
 
 async function fetchFundPage(fundCode) {
   const url = YF_JP_BASE + encodeURIComponent(fundCode);
-  const res = await fetch(CORS_PROXY + encodeURIComponent(url), { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  return fetchViaProxy(url);
 }
 
 async function getCurrentPriceFundJS(ticker) {
@@ -571,13 +575,29 @@ async function getFundNameJS(ticker) {
   return m ? m[1].trim() : '';
 }
 
+async function fetchViaProxy(url) {
+  // 動作中のプロキシから試し、失敗したら次へ切り替え
+  for (let attempt = 0; attempt < CORS_PROXIES.length; attempt++) {
+    const idx = (_proxyIdx + attempt) % CORS_PROXIES.length;
+    try {
+      const res = await fetch(CORS_PROXIES[idx] + encodeURIComponent(url), {
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (text.includes('Upgrade at https://corsproxy.io')) throw new Error('paid plan');
+      _proxyIdx = idx; // 成功したプロキシを優先
+      return text;
+    } catch(e) {
+      if (attempt === CORS_PROXIES.length - 1) throw e;
+    }
+  }
+}
+
 async function yhFetch(ticker, params = '') {
-  const raw = `${YF_CHART}${encodeURIComponent(ticker)}${params}`;
-  const res  = await fetch(CORS_PROXY + encodeURIComponent(raw), {
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
+  const raw  = `${YF_CHART}${encodeURIComponent(ticker)}${params}`;
+  const text = await fetchViaProxy(raw);
+  const json = JSON.parse(text);
   const err  = json.chart?.error?.description;
   if (err) throw new Error(err);
   const result = json.chart?.result?.[0];
@@ -1152,6 +1172,9 @@ function renderLineChart() {
   if (!dates.length) return;
 
   function getLastKnown(arr, target) {
+    if (!arr.length) return null;
+    // 期間開始より前のデータしかない銘柄は最古値で補完（backward fill）
+    if (arr[0].date > target) return arr[0].close;
     let last = null;
     for (const item of arr) { if (item.date <= target) last = item.close; else break; }
     return last;
