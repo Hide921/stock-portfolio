@@ -1071,7 +1071,9 @@ if (!raw.length) save(true);
 
 render();
 renderPieChart();
-checkAPI();  // バックグラウンドで接続テスト → 成功時に価格+履歴を自動取得
+// 価格取得とグラフ履歴取得を並列で開始（グラフを待たせない）
+checkAPI();
+fetchHistory(currentPeriod);
 
 // Render バックエンドをスリープさせないよう10分ごとにping
 if (API_BASE) {
@@ -1239,6 +1241,8 @@ async function fetchAllPrices() {
   save();
   render();
   renderPieChart();
+  // 価格更新後はキャッシュを破棄して最新履歴を再取得
+  delete historyCache[currentPeriod];
   fetchHistory(currentPeriod);
 
   toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
@@ -1266,12 +1270,31 @@ async function fetchHistory(period) {
   }
 
   const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
-  const results    = await Promise.allSettled(
-    allTickers.map(t => getHistory(t, period).then(d => ({ [t]: d })))
-  );
+  const stockTickers = allTickers.filter(t => !isFundTicker(t));
+  const fundTickers  = allTickers.filter(t => isFundTicker(t));
+  let fetched = {};
 
-  historyData = Object.assign({}, ...results.filter(r => r.status === 'fulfilled').map(r => r.value));
-  historyCache[period] = historyData;  // キャッシュ保存
+  // ① Renderに全ティッカーを一括リクエスト（1回の通信で完結）
+  if (API_BASE) {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/history?tickers=${encodeURIComponent(stockTickers.join(','))}&period=${period}`,
+        { signal: AbortSignal.timeout(20000) }
+      );
+      if (res.ok) fetched = await res.json();
+    } catch(e) {}
+  }
+
+  // ② Renderで取得できなかった株式ティッカーを外部プロキシで補完（並列）
+  const missing = stockTickers.filter(t => !fetched[t]?.length);
+  const fallbacks = await Promise.allSettled([
+    ...missing.map(t => getHistoryViaCors(t, period).then(d => ({ [t]: d }))),
+    ...fundTickers.map(t => getHistoryFund(t, period).then(d => ({ [t]: d }))),
+  ]);
+  fallbacks.filter(r => r.status === 'fulfilled').forEach(r => Object.assign(fetched, r.value));
+
+  historyData = fetched;
+  historyCache[period] = fetched;
   renderLineChart();
 
   document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
