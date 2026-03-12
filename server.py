@@ -183,6 +183,30 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path='/static')
 CORS(app)  # 全オリジン許可（公開株価データのため問題なし）
 
+# ── In-memory cache (レート制限対策) ──────────────────────────────
+_price_cache: dict = {}   # ticker -> {'data': {...}, 'ts': float}
+_hist_cache:  dict = {}   # (ticker, period) -> {'data': [...], 'ts': float}
+PRICE_CACHE_TTL = 300     # 5分
+HIST_CACHE_TTL  = 600     # 10分
+
+def _cached_price(ticker: str):
+    entry = _price_cache.get(ticker)
+    if entry and time.time() - entry['ts'] < PRICE_CACHE_TTL:
+        return entry['data']
+    return None
+
+def _store_price(ticker: str, data: dict):
+    _price_cache[ticker] = {'data': data, 'ts': time.time()}
+
+def _cached_hist(ticker: str, period: str):
+    entry = _hist_cache.get((ticker, period))
+    if entry and time.time() - entry['ts'] < HIST_CACHE_TTL:
+        return entry['data']
+    return None
+
+def _store_hist(ticker: str, period: str, data: list):
+    _hist_cache[(ticker, period)] = {'data': data, 'ts': time.time()}
+
 
 # ── Helpers ───────────────────────────────────────────────────────
 def safe_float(v):
@@ -223,13 +247,18 @@ def get_prices():
     result  = {}
 
     def fetch_one(ticker):
+        cached = _cached_price(ticker)
+        if cached:
+            logging.info(f'CACHE {ticker}')
+            return ticker, cached
         if is_fund_ticker(ticker):
             fund_code = ticker[:-2]
-            return ticker, get_fund_price_yfjp(fund_code)
+            data = get_fund_price_yfjp(fund_code)
         else:
             data = fetch_price_with_retry(ticker)
             logging.info(f'OK   {ticker}: {data["price"]} ({data["currency"]})')
-            return ticker, data
+        _store_price(ticker, data)
+        return ticker, data
 
     # 並列取得 + 1銘柄あたり30秒タイムアウト
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as ex:
@@ -266,6 +295,11 @@ def get_history():
     result    = {}
 
     for ticker in fetch_set:
+        cached = _cached_hist(ticker, period)
+        if cached is not None:
+            result[ticker] = cached
+            logging.info(f'CACHE HIST {ticker} ({period})')
+            continue
         try:
             if is_fund_ticker(ticker):
                 fund_code      = ticker[:-2]
@@ -285,6 +319,8 @@ def get_history():
 
                 result[ticker] = data
                 logging.info(f'HIST {ticker}: {len(data)} bars ({period})')
+
+            _store_hist(ticker, period, result[ticker])
 
         except Exception as e:
             logging.warning(f'HIST ERR {ticker}: {e}')
