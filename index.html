@@ -678,25 +678,26 @@ async function getHistoryFund(ticker, period) {
   }
 }
 
+async function getHistoryViaCors(ticker, period) {
+  const r      = await yhFetch(ticker, `?interval=1d&range=${period}`);
+  const ts     = r.timestamp || [];
+  const closes = r.indicators?.quote?.[0]?.close || [];
+  return ts
+    .map((t, i) => ({ date: new Date(t * 1000).toISOString().slice(0, 10), close: closes[i] }))
+    .filter(d => d.close != null && !isNaN(d.close));
+}
+
 async function getHistory(ticker, period) {
   if (isFundTicker(ticker)) return await getHistoryFund(ticker, period);
-  // ローカルサーバー経由を優先
-  try {
-    const res = await fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
-      signal: AbortSignal.timeout(20000),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data[ticker]?.length) return data[ticker];
-    }
-  } catch(e) { /* フォールバックへ */ }
-  // CORS プロキシ経由（フォールバック）
-  const r          = await yhFetch(ticker, `?interval=1d&range=${period}`);
-  const timestamps = r.timestamp || [];
-  const closes     = r.indicators?.quote?.[0]?.close || [];
-  return timestamps
-    .map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
-    .filter(d => d.close != null && !isNaN(d.close));
+  // RenderバックエンドとCORSプロキシを並列で叩き、先に返った方を使う
+  const renderPromise = API_BASE
+    ? fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, { signal: AbortSignal.timeout(15000) })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(data => { if (data[ticker]?.length) return data[ticker]; throw new Error(); })
+    : Promise.reject();
+  const corsPromise = getHistoryViaCors(ticker, period);
+  // どちらか先に成功した結果を返す
+  return Promise.any([renderPromise, corsPromise]);
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -722,6 +723,7 @@ let autoRateEnabled  = false;
 let autoRateInterval = null;
 let currentPeriod    = '1mo';
 let historyData      = null;
+const historyCache   = {};  // 期間別キャッシュ { '1mo': { ticker: [...] } }
 let pieChart         = null;
 let lineChart        = null;
 
@@ -1203,12 +1205,21 @@ async function fetchHistory(period) {
     b.disabled = true;
   });
 
+  // キャッシュ済みならすぐ描画
+  if (historyCache[period]) {
+    historyData = historyCache[period];
+    renderLineChart();
+    document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
+    return;
+  }
+
   const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
   const results    = await Promise.allSettled(
     allTickers.map(t => getHistory(t, period).then(d => ({ [t]: d })))
   );
 
   historyData = Object.assign({}, ...results.filter(r => r.status === 'fulfilled').map(r => r.value));
+  historyCache[period] = historyData;  // キャッシュ保存
   renderLineChart();
 
   document.querySelectorAll('.period-btn').forEach(b => b.disabled = false);
