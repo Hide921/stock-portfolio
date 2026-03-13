@@ -1289,121 +1289,133 @@ async function fetchAllPrices() {
   const btn = document.getElementById('fetchBtn');
   btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
   btn.disabled  = true;
+  const withTimeout = (promise, ms) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
 
-  // 全銘柄 + USDJPY を取得
-  const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
-  const priceMap   = {};
+  try {
+    // 全銘柄 + USDJPY を取得
+    const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
+    const priceMap   = {};
 
-  // ── Step1: Renderに全銘柄を1回のバッチリクエスト（最速）──
-  if (API_BASE) {
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
-        { signal: AbortSignal.timeout(25000), cache: 'no-store' }
+    // ── Step1: Renderに全銘柄を1回のバッチリクエスト（最速）──
+    if (API_BASE) {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
+          { signal: AbortSignal.timeout(25000), cache: 'no-store' }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          Object.entries(data).forEach(([t, d]) => {
+            if (!d?.price) return;
+            // 投信はRenderが円/万口で返すので÷10,000して円/口に変換
+            const price = isFundTicker(t) ? d.price / 10000 : d.price;
+            const prev  = isFundTicker(t) && d.prev_close != null ? d.prev_close / 10000 : d.prev_close;
+            const dayCh = isFundTicker(t) && d.day_change != null ? d.day_change / 10000 : d.day_change;
+            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY' };
+          });
+        }
+      } catch(e) {}
+    }
+
+    // ── Step2: 取得できなかった銘柄をCORSプロキシで並列補完 ──
+    const missing = allTickers.filter(t => !priceMap[t]?.price);
+    if (missing.length) {
+      const corsResults = await Promise.allSettled(
+        missing.map(t => withTimeout(
+          getCurrentPriceViaCors(t).then(d => ({ ticker: t, ...d })),
+          15000
+        ))
       );
-      if (res.ok) {
-        const data = await res.json();
-        Object.entries(data).forEach(([t, d]) => {
-          if (!d?.price) return;
-          // 投信はRenderが円/万口で返すので÷10,000して円/口に変換
-          const price = isFundTicker(t) ? d.price / 10000 : d.price;
-          const prev  = isFundTicker(t) && d.prev_close != null ? d.prev_close / 10000 : d.prev_close;
-          const dayCh = isFundTicker(t) && d.day_change != null ? d.day_change / 10000 : d.day_change;
-          priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY' };
-        });
+      corsResults.forEach(r => {
+        if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
+      });
+    }
+
+    // USDJPY 更新
+    if (priceMap['USDJPY=X']) {
+      usdJpyRate = priceMap['USDJPY=X'].price;
+      document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
+      document.getElementById('rateTime').textContent  =
+        '更新: ' + new Date().toLocaleTimeString('ja-JP');
+    }
+
+    let updated = 0, failed = 0;
+    const now = new Date().toISOString();
+    const cache = loadPriceCache();
+
+    stocks = stocks.map(s => {
+      const d = priceMap[s.yahooTicker];
+      if (d?.price) {
+        updated++;
+        return {
+          ...s,
+          currentPrice: d.price,
+          prevClose: d.prev_close ?? null,
+          dayChange: d.day_change ?? ((d.prev_close != null) ? (d.price - d.prev_close) : null),
+          currency: d.currency || s.currency,
+          lastFetched: now,
+          fetchError: null,
+        };
       }
-    } catch(e) {}
-  }
-
-  // ── Step2: 取得できなかった銘柄をCORSプロキシで並列補完 ──
-  const missing = allTickers.filter(t => !priceMap[t]?.price);
-  if (missing.length) {
-    const corsResults = await Promise.allSettled(
-      missing.map(t => getCurrentPriceViaCors(t).then(d => ({ ticker: t, ...d })))
-    );
-    corsResults.forEach(r => {
-      if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
+      // API失敗 → キャッシュから価格を復元（⚠を出さない）
+      const cached = cache?.prices?.[s.yahooTicker];
+      if (cached?.price) {
+        return {
+          ...s,
+          currentPrice: cached.price,
+          prevClose: null,
+          dayChange: null,
+          fetchError: null,
+        };
+      }
+      failed++;
+      return { ...s, lastFetched: now, fetchError: '取得失敗' };
     });
-  }
 
-  // USDJPY 更新
-  if (priceMap['USDJPY=X']) {
-    usdJpyRate = priceMap['USDJPY=X'].price;
-    document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
-    document.getElementById('rateTime').textContent  =
-      '更新: ' + new Date().toLocaleTimeString('ja-JP');
-  }
+    // 成功分をキャッシュ保存
+    if (updated > 0) savePriceCache(priceMap, usdJpyRate);
 
-  let updated = 0, failed = 0;
-  const now = new Date().toISOString();
-  const cache = loadPriceCache();
-
-  stocks = stocks.map(s => {
-    const d = priceMap[s.yahooTicker];
-    if (d?.price) {
-      updated++;
-      return {
-        ...s,
-        currentPrice: d.price,
-        prevClose: d.prev_close ?? null,
-        dayChange: d.day_change ?? ((d.prev_close != null) ? (d.price - d.prev_close) : null),
-        currency: d.currency || s.currency,
-        lastFetched: now,
-        fetchError: null,
-      };
+    // API ステータス更新
+    const dot = document.getElementById('apiDot');
+    if (updated > 0) {
+      apiOnline = true;
+      dot.style.background = 'var(--green)';
+      document.getElementById('apiLabel').textContent = 'Yahoo Finance ✓';
+    } else if (cache) {
+      // キャッシュ使用中 — エラー扱いしない
+      dot.style.background = 'var(--yellow)';
+      document.getElementById('apiLabel').textContent = `キャッシュ (${cacheAgeText(cache.ts)})`;
+      failed = 0;
+    } else {
+      apiOnline = false;
+      dot.style.background = 'var(--red)';
+      document.getElementById('apiLabel').textContent = 'API接続エラー';
     }
-    // API失敗 → キャッシュから価格を復元（⚠を出さない）
-    const cached = cache?.prices?.[s.yahooTicker];
-    if (cached?.price) {
-      return {
-        ...s,
-        currentPrice: cached.price,
-        prevClose: null,
-        dayChange: null,
-        fetchError: null,
-      };
+
+    // 価格取得成功時のみ日次ログを記録・保存
+    if (updated > 0) {
+      recordDailyLog();
+      gistSave(true); // サイレント保存（ログをGistに同期）
     }
-    failed++;
-    return { ...s, lastFetched: now, fetchError: '取得失敗' };
-  });
 
-  // 成功分をキャッシュ保存
-  if (updated > 0) savePriceCache(priceMap, usdJpyRate);
+    save();
+    render();
+    renderPieChart();
+    renderLineChart(); // ログベースで即時描画
 
-  // API ステータス更新
-  const dot = document.getElementById('apiDot');
-  if (updated > 0) {
-    apiOnline = true;
-    dot.style.background = 'var(--green)';
-    document.getElementById('apiLabel').textContent = 'Yahoo Finance ✓';
-  } else if (cache) {
-    // キャッシュ使用中 — エラー扱いしない
-    dot.style.background = 'var(--yellow)';
-    document.getElementById('apiLabel').textContent = `キャッシュ (${cacheAgeText(cache.ts)})`;
-    failed = 0;
-  } else {
-    apiOnline = false;
-    dot.style.background = 'var(--red)';
-    document.getElementById('apiLabel').textContent = 'API接続エラー';
+    toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
+          failed > 0 ? 'error' : 'success');
+  } catch (e) {
+    console.error('fetchAllPrices error:', e);
+    toast('価格取得中にエラーが発生しました', 'error');
+  } finally {
+    isFetching = false;
+    btn.innerHTML = '📡 価格を自動取得';
+    btn.disabled  = false;
   }
-
-  // 価格取得成功時のみ日次ログを記録・保存
-  if (updated > 0) {
-    recordDailyLog();
-    gistSave(true); // サイレント保存（ログをGistに同期）
-  }
-
-  save();
-  render();
-  renderPieChart();
-  renderLineChart(); // ログベースで即時描画
-
-  toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
-        failed > 0 ? 'error' : 'success');
-
-  isFetching = false;
-  btn.innerHTML = '📡 価格を自動取得';
-  btn.disabled  = false;
 }
 
 // ── 期間ボタン（同期・即時） ─────────────────────────────────────
