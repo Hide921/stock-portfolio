@@ -632,9 +632,25 @@ async function getCurrentPriceViaCors(ticker) {
   if (isFundTicker(ticker)) return await getCurrentPriceFundJS(ticker);
   const r    = await yhFetch(ticker, '?interval=1d&range=2d');
   const meta = r.meta;
-  const price = meta.regularMarketPrice ?? meta.postMarketPrice;
+  const postPrice = Number.isFinite(meta.postMarketPrice) ? meta.postMarketPrice : null;
+  const postChange = Number.isFinite(meta.postMarketChange) ? meta.postMarketChange : null;
+  const prePrice = Number.isFinite(meta.preMarketPrice) ? meta.preMarketPrice : null;
+  const preChange = Number.isFinite(meta.preMarketChange) ? meta.preMarketChange : null;
+  const regPrice = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : null;
+  const regChange = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
+
+  // 価格と前日比は同じセッションの値を使う
+  let price = regPrice;
+  let change = regChange;
+  if (postPrice != null && postChange != null) {
+    price = postPrice;
+    change = postChange;
+  } else if (prePrice != null && preChange != null) {
+    price = prePrice;
+    change = preChange;
+  }
+
   if (!price) throw new Error('価格データなし');
-  const change = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
   const prevByChange = (change != null) ? (price - change) : null;
   return {
     price:      price,
