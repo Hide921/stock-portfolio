@@ -631,7 +631,7 @@ async function getCurrentPriceViaCors(ticker) {
   if (!price) throw new Error('価格データなし');
   return {
     price:      price,
-    prev_close: meta.chartPreviousClose ?? meta.regularMarketPreviousClose ?? null,
+    prev_close: meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose ?? null,
     currency:   meta.currency || 'JPY',
   };
 }
@@ -1279,12 +1279,12 @@ async function fetchAllPrices() {
     const d = priceMap[s.yahooTicker];
     if (d?.price) {
       updated++;
-      return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? s.prevClose, currency: d.currency || s.currency, lastFetched: now, fetchError: null };
+      return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? null, currency: d.currency || s.currency, lastFetched: now, fetchError: null };
     }
     // API失敗 → キャッシュから価格を復元（⚠を出さない）
     const cached = cache?.prices?.[s.yahooTicker];
     if (cached?.price) {
-      return { ...s, currentPrice: cached.price, prevClose: cached.prev_close ?? s.prevClose, fetchError: null };
+      return { ...s, currentPrice: cached.price, prevClose: cached.prev_close ?? null, fetchError: null };
     }
     failed++;
     return { ...s, lastFetched: now, fetchError: '取得失敗' };
@@ -1488,6 +1488,7 @@ function render() {
   // サマリー集計
   let totalValueJPY = 0, totalCostJPY = 0, dayPLJPY = 0;
   let marginValueJPY = 0, marginCostJPY = 0, marginDayPLJPY = 0;
+  let dayBaseJPY = 0;
   const markets = { JP: 0, US: 0, FUND: 0 };
   stocks.forEach(s => {
     if (s.tradeType === 'margin') {
@@ -1499,12 +1500,13 @@ function render() {
       totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
       dayPLJPY      += s.prevClose ? toJPY((s.currentPrice - s.prevClose) * s.quantity, s.currency) : 0;
     }
+    if (s.prevClose) dayBaseJPY += toJPY(s.prevClose * s.quantity, s.currency);
     markets[s.market] = (markets[s.market] || 0) + 1;
   });
   const totalPL    = totalValueJPY - totalCostJPY;
   const totalPLPct = totalCostJPY  ? totalPL  / totalCostJPY  * 100 : 0;
   const allDayPLJPY = dayPLJPY + marginDayPLJPY; // 本日損益は現物＋信用合算
-  const dayPLPct   = totalValueJPY ? allDayPLJPY / (totalValueJPY - allDayPLJPY) * 100 : 0;
+  const dayPLPct   = dayBaseJPY ? allDayPLJPY / dayBaseJPY * 100 : 0;
   const marginPL    = marginValueJPY - marginCostJPY;
   const marginPLPct = marginCostJPY ? marginPL / marginCostJPY * 100 : 0;
   const hasMargin   = stocks.some(s => s.tradeType === 'margin');

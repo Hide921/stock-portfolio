@@ -104,7 +104,11 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     result = data['chart']['result'][0]
     meta   = result['meta']
     price  = safe_float(meta.get('regularMarketPrice'))
-    prev   = safe_float(meta.get('chartPreviousClose') or meta.get('previousClose'))
+    prev   = safe_float(
+        meta.get('regularMarketPreviousClose')
+        or meta.get('chartPreviousClose')
+        or meta.get('previousClose')
+    )
     if price is None:
         closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
         price  = safe_float(next((c for c in reversed(closes) if c is not None), None))
