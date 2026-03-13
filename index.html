@@ -282,7 +282,7 @@
       <div class="card-sub" id="marketBreak">-</div>
     </div>
     <div class="card">
-      <div class="card-label">本日損益 (円換算)</div>
+      <div class="card-label">本日損益 (円換算 / 通常取引基準)</div>
       <div class="card-value neutral" id="dayPL">¥0</div>
       <div class="card-sub" id="dayPLPct">0.00%</div>
     </div>
@@ -639,20 +639,15 @@ async function getCurrentPriceViaCors(ticker) {
   const regPrice = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : null;
   const regChange = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
 
-  const marketState = String(meta.marketState || '').toUpperCase();
-
-  // marketState に合わせて、価格と前日比を同一セッションで選択
+  // 前日比は常に通常取引(regular)を基準にする
   let price = regPrice;
   let change = regChange;
-  if (marketState.startsWith('POST') && postPrice != null && postChange != null) {
-    price = postPrice;
-    change = postChange;
-  } else if (marketState.startsWith('PRE') && prePrice != null && preChange != null) {
-    price = prePrice;
-    change = preChange;
-  } else if (regPrice != null && regChange != null) {
+  if (regPrice != null && regChange != null) {
     price = regPrice;
     change = regChange;
+  } else if (regPrice != null) {
+    price = regPrice;
+    change = null;
   } else if (postPrice != null && postChange != null) {
     price = postPrice;
     change = postChange;
