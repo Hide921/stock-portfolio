@@ -42,6 +42,7 @@ def fetch_price_with_retry(ticker: str, retries: int = 2) -> dict:
             return {
                 'price':      round(price, 4),
                 'prev_close': round(prev, 4) if prev is not None else None,
+                'day_change': round(price - prev, 4) if (price is not None and prev is not None) else None,
                 'currency':   getattr(info, 'currency', None) or 'JPY',
                 'error':      None,
             }
@@ -112,6 +113,8 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
             or meta.get('chartPreviousClose')
             or meta.get('previousClose')
         )
+    if change is None and price is not None and prev is not None:
+        change = safe_float(price - prev)
     if price is None:
         closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
         price  = safe_float(next((c for c in reversed(closes) if c is not None), None))
@@ -121,6 +124,7 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     return {
         'price':      round(price, 4),
         'prev_close': round(prev, 4) if prev is not None else None,
+        'day_change': round(change, 4) if change is not None else None,
         'currency':   currency,
         'error':      None,
     }
@@ -174,6 +178,7 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
     return {
         'price':      price,
         'prev_close': prev,
+        'day_change': change,
         'currency':   'JPY',
         'error':      None,
     }
@@ -464,7 +469,7 @@ def get_prices():
                 result[t] = data
             except Exception as e:
                 logging.warning(f'ERR  {t}: {e}')
-                result[t] = {'price': None, 'prev_close': None, 'currency': None, 'error': str(e)}
+                result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': str(e)}
 
     return jsonify(result)
 
