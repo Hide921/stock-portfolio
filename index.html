@@ -662,12 +662,19 @@ async function getCurrentPriceViaCors(ticker) {
     change = preChange;
   }
 
-  if (!price) throw new Error('価格データなし');
+  if (price == null) throw new Error('価格データなし');
+  const prevDirect = Number.isFinite(meta.regularMarketPreviousClose)
+    ? meta.regularMarketPreviousClose
+    : Number.isFinite(meta.chartPreviousClose)
+      ? meta.chartPreviousClose
+      : Number.isFinite(meta.previousClose)
+        ? meta.previousClose
+        : null;
   const prevByChange = (change != null) ? (price - change) : null;
   return {
     price:      price,
-    prev_close: prevByChange ?? meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose ?? null,
-    day_change: change,
+    prev_close: prevDirect ?? prevByChange,
+    day_change: change ?? ((prevDirect != null) ? (price - prevDirect) : null),
     currency:   meta.currency || 'JPY',
   };
 }

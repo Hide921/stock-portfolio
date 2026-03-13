@@ -127,13 +127,14 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
         price, change = pre_price, pre_change
     else:
         price, change = reg_price or post_price or pre_price, reg_change
-    prev = safe_float(price - change) if (price is not None and change is not None) else None
-    if prev is None:
-        prev = safe_float(
-            meta.get('regularMarketPreviousClose')
-            or meta.get('chartPreviousClose')
-            or meta.get('previousClose')
-        )
+    # 前日終値は Yahoo のメタ値を直接採用（逆算はフォールバック）
+    prev = safe_float(
+        meta.get('regularMarketPreviousClose')
+        or meta.get('chartPreviousClose')
+        or meta.get('previousClose')
+    )
+    if prev is None and price is not None and change is not None:
+        prev = safe_float(price - change)
     if change is None and price is not None and prev is not None:
         change = safe_float(price - prev)
     if price is None:
