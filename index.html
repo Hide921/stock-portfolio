@@ -668,6 +668,7 @@ async function getCurrentPriceFund(ticker) {
     try {
       const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
         signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
       });
       if (res.ok) {
         const data = await res.json();
@@ -695,6 +696,7 @@ async function getCurrentPrice(ticker) {
     try {
       const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(ticker)}`, {
         signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
       });
       if (res.ok) {
         const data = await res.json();
@@ -1164,7 +1166,7 @@ fetchHistory(currentPeriod);
 // Render バックエンドをスリープさせないよう10分ごとにping
 if (API_BASE) {
   setInterval(() => {
-    fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000) }).catch(() => {});
+    fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000), cache: 'no-store' }).catch(() => {});
   }, 10 * 60 * 1000);
 }
 
@@ -1177,6 +1179,7 @@ if (API_BASE || (syncCfg.pat && syncCfg.gistId)) {
 
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
 const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
+const PRICE_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 
 function savePriceCache(priceMap, rate) {
   try {
@@ -1185,7 +1188,14 @@ function savePriceCache(priceMap, rate) {
 }
 
 function loadPriceCache() {
-  try { return JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || 'null'); } catch { return null; }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || 'null');
+    if (!parsed?.ts) return null;
+    if (Date.now() - parsed.ts > PRICE_CACHE_MAX_AGE_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function cacheAgeText(ts) {
@@ -1275,7 +1285,7 @@ async function fetchAllPrices() {
     try {
       const res = await fetch(
         `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
-        { signal: AbortSignal.timeout(25000) }
+        { signal: AbortSignal.timeout(25000), cache: 'no-store' }
       );
       if (res.ok) {
         const data = await res.json();
@@ -1334,8 +1344,8 @@ async function fetchAllPrices() {
       return {
         ...s,
         currentPrice: cached.price,
-        prevClose: cached.prev_close ?? null,
-        dayChange: cached.day_change ?? ((cached.prev_close != null) ? (cached.price - cached.prev_close) : null),
+        prevClose: null,
+        dayChange: null,
         fetchError: null,
       };
     }

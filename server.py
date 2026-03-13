@@ -272,7 +272,11 @@ def safe_float(v):
 @app.route('/')
 def index():
     """Serve the single-page app."""
-    return send_from_directory(BASE_DIR, 'index.html')
+    resp = send_from_directory(BASE_DIR, 'index.html')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 # ── API ───────────────────────────────────────────────────────────
