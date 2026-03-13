@@ -111,11 +111,13 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     reg_price = safe_float(meta.get('regularMarketPrice'))
     reg_change = safe_float(meta.get('regularMarketChange'))
 
-    # 価格と前日比は同一セッションの値をペアで使う
-    if post_price is not None and post_change is not None:
-        price, change = post_price, post_change
+    # 前日比は通常取引(regular)を優先し、欠損時のみ時間外へフォールバック
+    if reg_price is not None and reg_change is not None:
+        price, change = reg_price, reg_change
     elif pre_price is not None and pre_change is not None:
         price, change = pre_price, pre_change
+    elif post_price is not None and post_change is not None:
+        price, change = post_price, post_change
     else:
         price, change = reg_price, reg_change
     prev = safe_float(price - change) if (price is not None and change is not None) else None
