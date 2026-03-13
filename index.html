@@ -639,17 +639,26 @@ async function getCurrentPriceViaCors(ticker) {
   const regPrice = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : null;
   const regChange = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
 
-  // 前日比は通常取引(regular)を優先し、欠損時のみ時間外へフォールバック
+  const marketState = String(meta.marketState || '').toUpperCase();
+
+  // marketState に合わせて、価格と前日比を同一セッションで選択
   let price = regPrice;
   let change = regChange;
-  if (price == null || change == null) {
-    if (prePrice != null && preChange != null) {
-      price = prePrice;
-      change = preChange;
-    } else if (postPrice != null && postChange != null) {
-      price = postPrice;
-      change = postChange;
-    }
+  if (marketState.startsWith('POST') && postPrice != null && postChange != null) {
+    price = postPrice;
+    change = postChange;
+  } else if (marketState.startsWith('PRE') && prePrice != null && preChange != null) {
+    price = prePrice;
+    change = preChange;
+  } else if (regPrice != null && regChange != null) {
+    price = regPrice;
+    change = regChange;
+  } else if (postPrice != null && postChange != null) {
+    price = postPrice;
+    change = postChange;
+  } else if (prePrice != null && preChange != null) {
+    price = prePrice;
+    change = preChange;
   }
 
   if (!price) throw new Error('価格データなし');
