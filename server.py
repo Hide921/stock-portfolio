@@ -111,8 +111,13 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     reg_price = safe_float(meta.get('regularMarketPrice'))
     reg_change = safe_float(meta.get('regularMarketChange'))
 
-    # 前日比は常に通常取引(regular)を基準にする
-    if reg_price is not None and reg_change is not None:
+    market_state = str(meta.get('marketState') or '').upper()
+
+    # PRE だけは pre セッション値を使う（前日終値とのズレを避ける）。
+    # それ以外は regular 基準を優先し、欠損時のみ post/pre へフォールバック。
+    if market_state.startswith('PRE') and pre_price is not None and pre_change is not None:
+        price, change = pre_price, pre_change
+    elif reg_price is not None and reg_change is not None:
         price, change = reg_price, reg_change
     elif reg_price is not None:
         price, change = reg_price, None

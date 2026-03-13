@@ -640,10 +640,15 @@ async function getCurrentPriceViaCors(ticker) {
   const regPrice = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : null;
   const regChange = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
 
-  // 前日比は常に通常取引(regular)を基準にする
+  const marketState = String(meta.marketState || '').toUpperCase();
+
+  // PRE だけは pre セッション値を使う。基本は regular 基準。
   let price = regPrice;
   let change = regChange;
-  if (regPrice != null && regChange != null) {
+  if (marketState.startsWith('PRE') && prePrice != null && preChange != null) {
+    price = prePrice;
+    change = preChange;
+  } else if (regPrice != null && regChange != null) {
     price = regPrice;
     change = regChange;
   } else if (regPrice != null) {
