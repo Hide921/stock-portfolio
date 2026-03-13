@@ -128,17 +128,26 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     else:
         price, change = reg_price or post_price or pre_price, reg_change
     # 前日終値は Yahoo のメタ値を直接採用（逆算はフォールバック）
-    prev = safe_float(
+    closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+    valid_closes = [safe_float(c) for c in closes if safe_float(c) is not None]
+    prev_from_bars = None
+    if valid_closes:
+        # price が最新終値と一致している場合は、その1つ前を前日終値とみなす。
+        if len(valid_closes) >= 2 and price is not None and abs(price - valid_closes[-1]) <= max(0.01, abs(price) * 0.0001):
+            prev_from_bars = valid_closes[-2]
+        else:
+            prev_from_bars = valid_closes[-1]
+
+    prev = prev_from_bars if prev_from_bars is not None else safe_float(
         meta.get('chartPreviousClose')
         or meta.get('regularMarketPreviousClose')
         or meta.get('previousClose')
     )
     if prev is None and price is not None and change is not None:
         prev = safe_float(price - change)
-    if change is None and price is not None and prev is not None:
+    if price is not None and prev is not None:
         change = safe_float(price - prev)
     if price is None:
-        closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
         price  = safe_float(next((c for c in reversed(closes) if c is not None), None))
     if price is None:
         raise ValueError('price is None')
