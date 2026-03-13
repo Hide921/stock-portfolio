@@ -629,9 +629,11 @@ async function getCurrentPriceViaCors(ticker) {
   const meta = r.meta;
   const price = meta.regularMarketPrice ?? meta.postMarketPrice;
   if (!price) throw new Error('価格データなし');
+  const change = Number.isFinite(meta.regularMarketChange) ? meta.regularMarketChange : null;
+  const prevByChange = (change != null) ? (price - change) : null;
   return {
     price:      price,
-    prev_close: meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose ?? null,
+    prev_close: prevByChange ?? meta.regularMarketPreviousClose ?? meta.chartPreviousClose ?? meta.previousClose ?? null,
     currency:   meta.currency || 'JPY',
   };
 }
