@@ -663,10 +663,10 @@ async function getCurrentPriceViaCors(ticker) {
   }
 
   if (price == null) throw new Error('価格データなし');
-  const prevDirect = Number.isFinite(meta.regularMarketPreviousClose)
-    ? meta.regularMarketPreviousClose
-    : Number.isFinite(meta.chartPreviousClose)
-      ? meta.chartPreviousClose
+  const prevDirect = Number.isFinite(meta.chartPreviousClose)
+    ? meta.chartPreviousClose
+    : Number.isFinite(meta.regularMarketPreviousClose)
+      ? meta.regularMarketPreviousClose
       : Number.isFinite(meta.previousClose)
         ? meta.previousClose
         : null;
@@ -1315,6 +1315,7 @@ async function fetchAllPrices() {
         );
         if (res.ok) {
           const data = await res.json();
+          if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
           Object.entries(data).forEach(([t, d]) => {
             if (!d?.price) return;
             // 投信はRenderが円/万口で返すので÷10,000して円/口に変換
@@ -1337,7 +1338,7 @@ async function fetchAllPrices() {
         ))
       );
       corsResults.forEach(r => {
-        if (r.status === 'fulfilled') priceMap[r.value.ticker] = r.value;
+        if (r.status === 'fulfilled' && r.value?.ticker && r.value?.price) priceMap[r.value.ticker] = r.value;
       });
     }
 
@@ -1410,8 +1411,8 @@ async function fetchAllPrices() {
 
     save();
     render();
-    renderPieChart();
-    renderLineChart(); // ログベースで即時描画
+    try { renderPieChart(); } catch(e) { console.warn('renderPieChart error:', e); }
+    try { renderLineChart(); } catch(e) { console.warn('renderLineChart error:', e); }
 
     toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
           failed > 0 ? 'error' : 'success');
