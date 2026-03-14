@@ -860,13 +860,15 @@ function calcSpotTotalJPY() {
 
 function recordDailyLog() {
   const value = Math.round(calcSpotTotalJPY());
-  if (!value) return;
+  if (!value) return false;
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
   const idx = portfolioLog.findIndex(e => e.date === today);
+  if (idx >= 0 && portfolioLog[idx].value === value) return false;
   if (idx >= 0) portfolioLog[idx].value = value;
   else portfolioLog.push({ date: today, value });
   portfolioLog.sort((a, b) => a.date.localeCompare(b.date));
   if (portfolioLog.length > 730) portfolioLog = portfolioLog.slice(-730); // 2年分保持
+  return true;
 }
 
 function mergePortfolioLogs(localLog, cloudLog) {
@@ -1036,6 +1038,7 @@ async function gistLoad(silent = false) {
     const localLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
     stocks       = data.stocks.map(migrateStock);
     portfolioLog = mergePortfolioLogs(localLog, cloudLog);
+    recordDailyLog(); // 当日分がなければ現在評価額で補完
     localStorage.setItem('stocks', JSON.stringify(stocks));
     localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
@@ -1271,6 +1274,7 @@ loadSyncCfg();
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
+if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
 if (!raw.length) save(true);
 
 render();
@@ -1285,6 +1289,14 @@ if (API_BASE) {
     fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000), cache: 'no-store' }).catch(() => {});
   }, 10 * 60 * 1000);
 }
+
+// 取りこぼし対策: タブを開いている間は15分ごとに当日ログを補完
+setInterval(() => {
+  if (recordDailyLog()) {
+    save();
+    renderLineChart();
+  }
+}, 15 * 60 * 1000);
 
 // 起動時にクラウドからデータを読み込む
 // Render /api/data（優先）または直接Gist（バックアップ）どちらかあれば実行
@@ -1499,16 +1511,15 @@ async function fetchAllPrices() {
       document.getElementById('apiLabel').textContent = 'API接続エラー';
     }
 
-    // 価格取得成功時のみ日次ログを記録・保存
-    if (updated > 0) {
-      recordDailyLog();
-      gistSave(true); // サイレント保存（ログをGistに同期）
-    }
+    // 取りこぼし防止: 取得結果（キャッシュ含む）を使って当日ログを補完
+    const logChanged = recordDailyLog();
 
     save();
     render();
     try { renderPieChart(); } catch(e) { console.warn('renderPieChart error:', e); }
     try { renderLineChart(); } catch(e) { console.warn('renderLineChart error:', e); }
+
+    if (logChanged && updated > 0) gistSave(true); // 当日ログが更新されたら即同期
 
     toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
           failed > 0 ? 'error' : 'success');
