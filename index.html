@@ -860,12 +860,21 @@ function calcSpotTotalJPY() {
 function recordDailyLog() {
   const value = Math.round(calcSpotTotalJPY());
   if (!value) return;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
   const idx = portfolioLog.findIndex(e => e.date === today);
   if (idx >= 0) portfolioLog[idx].value = value;
   else portfolioLog.push({ date: today, value });
   portfolioLog.sort((a, b) => a.date.localeCompare(b.date));
   if (portfolioLog.length > 730) portfolioLog = portfolioLog.slice(-730); // 2年分保持
+}
+
+function mergePortfolioLogs(localLog, cloudLog) {
+  const merged = new Map();
+  normalizePortfolioLog(localLog).forEach(e => merged.set(e.date, e.value));
+  normalizePortfolioLog(cloudLog).forEach(e => merged.set(e.date, e.value));
+  return [...merged.entries()]
+    .map(([date, value]) => ({ date, value }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function periodCutoffDate(period) {
@@ -1022,8 +1031,10 @@ async function gistLoad(silent = false) {
   }
 
   if (data) {
+    const cloudLog = normalizePortfolioLog(data.log);
+    const localLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
     stocks       = data.stocks.map(migrateStock);
-    portfolioLog = normalizePortfolioLog(data.log);
+    portfolioLog = mergePortfolioLogs(localLog, cloudLog);
     localStorage.setItem('stocks', JSON.stringify(stocks));
     localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
@@ -1094,7 +1105,7 @@ async function connectGist() {
         body: JSON.stringify({
           description: '株式ポートフォリオデータ',
           public: false,
-          files: { 'portfolio.json': { content: JSON.stringify(stocks, null, 2) } },
+          files: { 'portfolio.json': { content: JSON.stringify({ stocks, log: portfolioLog }, null, 2) } },
         }),
       });
       if (!createRes.ok) throw new Error('Gist作成失敗');
