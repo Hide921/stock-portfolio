@@ -75,6 +75,7 @@
     .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
     .line-stat  { font-size: 12px; color: var(--text-muted); }
     .line-stat strong { color: var(--text); font-size: 14px; font-weight: 700; }
+    .line-log-info { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
 
     /* ── Toolbar ── */
     .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; gap: 10px; flex-wrap: wrap; }
@@ -320,6 +321,7 @@
         <div class="line-stat">期間損益: <strong id="linePL">—</strong></div>
         <div class="line-stat">期間変化率: <strong id="linePLPct">—</strong></div>
       </div>
+      <div class="line-log-info" id="lineLogInfo">実績ログ: 0日</div>
       <div style="height:220px; position:relative">
         <canvas id="lineCanvas" style="display:none"></canvas>
         <div class="chart-placeholder" id="linePlaceholder">
@@ -1454,11 +1456,21 @@ function renderLineChart() {
   const canvas      = document.getElementById('lineCanvas');
   const placeholder = document.getElementById('linePlaceholder');
   const statsEl     = document.getElementById('lineStats');
+  const logInfoEl   = document.getElementById('lineLogInfo');
 
   const cutoff = periodCutoffDate(currentPeriod);
   const points = portfolioLog
     .filter(e => e.date >= cutoff && e.value > 0)
     .map(e => ({ date: e.date, value: e.value }));
+
+  const totalLogDays = portfolioLog.length;
+  if (!totalLogDays) {
+    logInfoEl.textContent = '実績ログ: 0日';
+  } else {
+    const firstDay = portfolioLog[0].date;
+    const lastDay = portfolioLog[totalLogDays - 1].date;
+    logInfoEl.textContent = `実績ログ: ${totalLogDays}日 (${firstDay}〜${lastDay}) / 表示期間: ${points.length}日`;
+  }
 
   if (points.length < 2) {
     if (lineChart) { lineChart.destroy(); lineChart = null; }
