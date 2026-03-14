@@ -813,8 +813,6 @@ let filterTradeType  = '';
 let autoRateEnabled  = false;
 let autoRateInterval = null;
 let currentPeriod    = '1mo';
-let historyData      = null;
-const historyCache   = {};  // 期間別キャッシュ { '1mo': { ticker: [...] } }
 let pieChart         = null;
 let lineChart        = null;
 let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
@@ -1300,7 +1298,7 @@ async function fetchRate() {
     document.getElementById('rateTime').textContent  =
       '更新: ' + new Date().toLocaleTimeString('ja-JP');
     render();
-    if (historyData) renderLineChart();
+    renderLineChart();
   } catch (e) {
     console.warn('USDJPY fetch:', e.message);
   }
@@ -1448,93 +1446,7 @@ function fetchHistory(period) {
   currentPeriod = period;
   document.querySelectorAll('.period-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.period === period));
-  const cached = historyCache[period];
-  if (Array.isArray(cached) && cached.length >= 2) {
-    historyData = cached;
-  }
   renderLineChart();
-  loadPortfolioHistory(period);
-}
-
-async function loadPortfolioHistory(period) {
-  const spotStocks = stocks.filter(s => s.tradeType !== 'margin' && s.quantity > 0 && s.yahooTicker);
-  if (!spotStocks.length) {
-    historyData = [];
-    historyCache[period] = [];
-    renderLineChart();
-    return;
-  }
-
-  try {
-    const uniqueTickers = [...new Set(spotStocks.map(s => s.yahooTicker))];
-    const histories = await Promise.allSettled(uniqueTickers.map(t => getHistory(t, period)));
-    const usdJpySeries = await getHistory('USDJPY=X', period).catch(() => []);
-
-    const histByTicker = {};
-    histories.forEach((res, idx) => {
-      if (res.status === 'fulfilled' && Array.isArray(res.value)) histByTicker[uniqueTickers[idx]] = res.value;
-    });
-
-    // 日付差（米国/日本の休場日差）で銘柄が抜けると合計が歪むため、終値を前方補完して合算する。
-    const closeMapByTicker = {};
-    const allDates = new Set();
-    for (const t of uniqueTickers) {
-      const m = new Map();
-      for (const p of (histByTicker[t] || [])) {
-        const date = String(p?.date || '').slice(0, 10);
-        const close = Number(p?.close);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(close) || close <= 0) continue;
-        m.set(date, close);
-        allDates.add(date);
-      }
-      closeMapByTicker[t] = m;
-    }
-
-    const fxMap = new Map();
-    for (const p of (usdJpySeries || [])) {
-      const date = String(p?.date || '').slice(0, 10);
-      const close = Number(p?.close);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(close) || close <= 0) continue;
-      fxMap.set(date, close);
-      allDates.add(date);
-    }
-
-    const sortedDates = [...allDates].sort((a, b) => a.localeCompare(b));
-    const lastCloseByTicker = Object.fromEntries(uniqueTickers.map(t => [t, null]));
-    let lastFx = Number.isFinite(usdJpyRate) && usdJpyRate > 0 ? usdJpyRate : 150;
-    const points = [];
-
-    for (const date of sortedDates) {
-      if (fxMap.has(date)) lastFx = fxMap.get(date);
-
-      for (const t of uniqueTickers) {
-        const m = closeMapByTicker[t];
-        if (m.has(date)) lastCloseByTicker[t] = m.get(date);
-      }
-
-      let canValueAll = true;
-      let total = 0;
-      for (const s of spotStocks) {
-        const close = lastCloseByTicker[s.yahooTicker];
-        if (!Number.isFinite(close) || close <= 0) {
-          canValueAll = false;
-          break;
-        }
-        const fx = s.currency === 'USD' ? lastFx : 1;
-        total += close * s.quantity * fx;
-      }
-
-      if (canValueAll && total > 0) {
-        points.push({ date, value: Math.round(total) });
-      }
-    }
-
-    historyData = points;
-    historyCache[period] = points;
-    renderLineChart();
-  } catch (e) {
-    console.warn('loadPortfolioHistory error:', e);
-  }
 }
 
 // ── 推移グラフ（日次ログベース）─────────────────────────────────
@@ -1544,15 +1456,9 @@ function renderLineChart() {
   const statsEl     = document.getElementById('lineStats');
 
   const cutoff = periodCutoffDate(currentPeriod);
-  let points = portfolioLog
+  const points = portfolioLog
     .filter(e => e.date >= cutoff && e.value > 0)
     .map(e => ({ date: e.date, value: e.value }));
-
-  if (points.length < 2 && Array.isArray(historyData) && historyData.length) {
-    points = historyData
-      .filter(e => e.date >= cutoff && e.value > 0)
-      .map(e => ({ date: e.date, value: e.value }));
-  }
 
   if (points.length < 2) {
     if (lineChart) { lineChart.destroy(); lineChart = null; }
