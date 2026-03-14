@@ -465,6 +465,7 @@
       <button class="btn-ghost" onclick="closeSyncModal()">閉じる</button>
       <button class="btn-ghost" id="syncSaveNowBtn" onclick="gistSave(false)" style="display:none">💾 今すぐ保存</button>
       <button class="btn-ghost" id="syncLoadBtn" onclick="gistLoad(false)" style="display:none">📥 クラウドから読込</button>
+      <button class="btn-ghost" id="syncRecoverBtn" onclick="recoverLogsFromGistHistory()" style="display:none">🩹 ログ復元</button>
       <button class="btn-ghost" id="syncDisconnectBtn" onclick="disconnectSync()" style="display:none;color:var(--red)">接続解除</button>
       <button class="btn-primary" id="syncConnectBtn" onclick="connectGist()">接続</button>
     </div>
@@ -1054,6 +1055,70 @@ async function gistLoad(silent = false) {
   isSyncing = false;
 }
 
+async function recoverLogsFromGistHistory() {
+  if (isSyncing) return;
+  if (!syncCfg.pat || !syncCfg.gistId) {
+    showSyncStatus('error', '先にクラウド同期へ接続してください');
+    return;
+  }
+
+  isSyncing = true;
+  updateSyncIcon('syncing');
+  showSyncStatus('info', 'Gist履歴からログを探索しています...');
+
+  let shouldPushRecoveredLog = false;
+
+  try {
+    const headRes = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
+    if (!headRes.ok) throw new Error('Gist履歴の取得に失敗しました');
+    const head = await headRes.json();
+    const versions = (head.history || []).map(h => h.version).slice(0, 30);
+    if (!versions.length) throw new Error('履歴が見つかりません');
+
+    let recovered = [];
+    for (const version of versions) {
+      try {
+        const revRes = await fetch(`${GIST_API}/${syncCfg.gistId}/${version}`, { headers: gistHeaders() });
+        if (!revRes.ok) continue;
+        const rev = await revRes.json();
+        const content = rev.files?.['portfolio.json']?.content;
+        if (!content) continue;
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed) && Array.isArray(parsed.log)) {
+          recovered = mergePortfolioLogs(recovered, parsed.log);
+        }
+      } catch (e) {
+        // 個別リビジョン失敗は無視して継続
+      }
+    }
+
+    const beforeDays = portfolioLog.length;
+    const merged = mergePortfolioLogs(portfolioLog, recovered);
+    const afterDays = merged.length;
+
+    if (afterDays > beforeDays) {
+      portfolioLog = merged;
+      save(true);
+      renderLineChart();
+      shouldPushRecoveredLog = true;
+      showSyncStatus('success', `ログを復元しました: ${beforeDays}日 → ${afterDays}日`);
+      toast(`ログ復元: ${beforeDays}日 → ${afterDays}日`, 'success');
+    } else {
+      showSyncStatus('info', `復元できる追加ログはありませんでした（${afterDays}日）`);
+      toast('追加で復元できるログはありませんでした', 'success');
+    }
+
+    updateSyncIcon('ok');
+  } catch (e) {
+    updateSyncIcon('error');
+    showSyncStatus('error', e.message || 'ログ復元に失敗しました');
+    toast('ログ復元に失敗しました', 'error');
+  } finally {
+    isSyncing = false;
+    if (shouldPushRecoveredLog) gistSave(true);
+  }
+}
+
 function togglePATVisibility() {
   const input  = document.getElementById('syncPAT');
   const btn    = document.getElementById('syncPATToggle');
@@ -1152,11 +1217,13 @@ function setSyncModalState(state) {
   const disconnectBtn = document.getElementById('syncDisconnectBtn');
   const loadBtn       = document.getElementById('syncLoadBtn');
   const saveNowBtn    = document.getElementById('syncSaveNowBtn');
+  const recoverBtn    = document.getElementById('syncRecoverBtn');
   if (state === 'connected') {
     connectBtn.style.display    = 'none';
     disconnectBtn.style.display = '';
     loadBtn.style.display       = '';
     saveNowBtn.style.display    = '';
+    recoverBtn.style.display    = '';
   } else {
     connectBtn.style.display    = '';
     connectBtn.disabled         = false;
@@ -1164,6 +1231,7 @@ function setSyncModalState(state) {
     disconnectBtn.style.display = 'none';
     loadBtn.style.display       = 'none';
     saveNowBtn.style.display    = 'none';
+    recoverBtn.style.display    = 'none';
   }
 }
 
