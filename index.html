@@ -1469,28 +1469,65 @@ async function loadPortfolioHistory(period) {
     const uniqueTickers = [...new Set(spotStocks.map(s => s.yahooTicker))];
     const histories = await Promise.allSettled(uniqueTickers.map(t => getHistory(t, period)));
     const usdJpySeries = await getHistory('USDJPY=X', period).catch(() => []);
-    const usdJpyByDate = Object.fromEntries((usdJpySeries || []).map(p => [p.date, Number(p.close)]));
 
     const histByTicker = {};
     histories.forEach((res, idx) => {
       if (res.status === 'fulfilled' && Array.isArray(res.value)) histByTicker[uniqueTickers[idx]] = res.value;
     });
 
-    const totalsByDate = {};
-    for (const s of spotStocks) {
-      const series = histByTicker[s.yahooTicker] || [];
-      for (const p of series) {
+    // 日付差（米国/日本の休場日差）で銘柄が抜けると合計が歪むため、終値を前方補完して合算する。
+    const closeMapByTicker = {};
+    const allDates = new Set();
+    for (const t of uniqueTickers) {
+      const m = new Map();
+      for (const p of (histByTicker[t] || [])) {
+        const date = String(p?.date || '').slice(0, 10);
         const close = Number(p?.close);
-        if (!Number.isFinite(close) || close <= 0 || !p?.date) continue;
-        const fx = s.currency === 'USD' ? (usdJpyByDate[p.date] || usdJpyRate) : 1;
-        totalsByDate[p.date] = (totalsByDate[p.date] || 0) + (close * s.quantity * fx);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(close) || close <= 0) continue;
+        m.set(date, close);
+        allDates.add(date);
       }
+      closeMapByTicker[t] = m;
     }
 
-    const points = Object.entries(totalsByDate)
-      .map(([date, value]) => ({ date, value: Math.round(value) }))
-      .filter(p => p.value > 0)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const fxMap = new Map();
+    for (const p of (usdJpySeries || [])) {
+      const date = String(p?.date || '').slice(0, 10);
+      const close = Number(p?.close);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(close) || close <= 0) continue;
+      fxMap.set(date, close);
+      allDates.add(date);
+    }
+
+    const sortedDates = [...allDates].sort((a, b) => a.localeCompare(b));
+    const lastCloseByTicker = Object.fromEntries(uniqueTickers.map(t => [t, null]));
+    let lastFx = Number.isFinite(usdJpyRate) && usdJpyRate > 0 ? usdJpyRate : 150;
+    const points = [];
+
+    for (const date of sortedDates) {
+      if (fxMap.has(date)) lastFx = fxMap.get(date);
+
+      for (const t of uniqueTickers) {
+        const m = closeMapByTicker[t];
+        if (m.has(date)) lastCloseByTicker[t] = m.get(date);
+      }
+
+      let canValueAll = true;
+      let total = 0;
+      for (const s of spotStocks) {
+        const close = lastCloseByTicker[s.yahooTicker];
+        if (!Number.isFinite(close) || close <= 0) {
+          canValueAll = false;
+          break;
+        }
+        const fx = s.currency === 'USD' ? lastFx : 1;
+        total += close * s.quantity * fx;
+      }
+
+      if (canValueAll && total > 0) {
+        points.push({ date, value: Math.round(total) });
+      }
+    }
 
     historyData = points;
     historyCache[period] = points;
