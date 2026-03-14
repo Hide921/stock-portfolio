@@ -818,6 +818,7 @@ const historyCache   = {};  // 期間別キャッシュ { '1mo': { ticker: [...]
 let pieChart         = null;
 let lineChart        = null;
 let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
+const PORTFOLIO_LOG_KEY = 'portfolio_log_v1';
 
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -872,6 +873,14 @@ function periodCutoffDate(period) {
   const d = new Date();
   d.setDate(d.getDate() - (days[period] || 31));
   return d.toISOString().slice(0, 10);
+}
+
+function normalizePortfolioLog(log) {
+  if (!Array.isArray(log)) return [];
+  return log
+    .map(e => ({ date: String(e?.date || '').slice(0, 10), value: Number(e?.value) }))
+    .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(e.date) && Number.isFinite(e.value) && e.value > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ── Migration ─────────────────────────────────────────────────────
@@ -1014,8 +1023,9 @@ async function gistLoad(silent = false) {
 
   if (data) {
     stocks       = data.stocks.map(migrateStock);
-    portfolioLog = data.log;
+    portfolioLog = normalizePortfolioLog(data.log);
     localStorage.setItem('stocks', JSON.stringify(stocks));
+    localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
     document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
     render();
     renderPieChart();
@@ -1181,6 +1191,7 @@ function closeSyncModal(e) {
 loadSyncCfg();
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
+portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 if (!raw.length) save(true);
 
 render();
@@ -1232,6 +1243,7 @@ function cacheAgeText(ts) {
 // ── Persistence ───────────────────────────────────────────────────
 function save(skipSync = false) {
   localStorage.setItem('stocks', JSON.stringify(stocks));
+  localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   if (!skipSync) scheduleSyncSave();
@@ -1436,7 +1448,56 @@ function fetchHistory(period) {
   currentPeriod = period;
   document.querySelectorAll('.period-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.period === period));
+  const cached = historyCache[period];
+  if (Array.isArray(cached) && cached.length >= 2) {
+    historyData = cached;
+  }
   renderLineChart();
+  loadPortfolioHistory(period);
+}
+
+async function loadPortfolioHistory(period) {
+  const spotStocks = stocks.filter(s => s.tradeType !== 'margin' && s.quantity > 0 && s.yahooTicker);
+  if (!spotStocks.length) {
+    historyData = [];
+    historyCache[period] = [];
+    renderLineChart();
+    return;
+  }
+
+  try {
+    const uniqueTickers = [...new Set(spotStocks.map(s => s.yahooTicker))];
+    const histories = await Promise.allSettled(uniqueTickers.map(t => getHistory(t, period)));
+    const usdJpySeries = await getHistory('USDJPY=X', period).catch(() => []);
+    const usdJpyByDate = Object.fromEntries((usdJpySeries || []).map(p => [p.date, Number(p.close)]));
+
+    const histByTicker = {};
+    histories.forEach((res, idx) => {
+      if (res.status === 'fulfilled' && Array.isArray(res.value)) histByTicker[uniqueTickers[idx]] = res.value;
+    });
+
+    const totalsByDate = {};
+    for (const s of spotStocks) {
+      const series = histByTicker[s.yahooTicker] || [];
+      for (const p of series) {
+        const close = Number(p?.close);
+        if (!Number.isFinite(close) || close <= 0 || !p?.date) continue;
+        const fx = s.currency === 'USD' ? (usdJpyByDate[p.date] || usdJpyRate) : 1;
+        totalsByDate[p.date] = (totalsByDate[p.date] || 0) + (close * s.quantity * fx);
+      }
+    }
+
+    const points = Object.entries(totalsByDate)
+      .map(([date, value]) => ({ date, value: Math.round(value) }))
+      .filter(p => p.value > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    historyData = points;
+    historyCache[period] = points;
+    renderLineChart();
+  } catch (e) {
+    console.warn('loadPortfolioHistory error:', e);
+  }
 }
 
 // ── 推移グラフ（日次ログベース）─────────────────────────────────
@@ -1446,9 +1507,15 @@ function renderLineChart() {
   const statsEl     = document.getElementById('lineStats');
 
   const cutoff = periodCutoffDate(currentPeriod);
-  const points = portfolioLog
+  let points = portfolioLog
     .filter(e => e.date >= cutoff && e.value > 0)
     .map(e => ({ date: e.date, value: e.value }));
+
+  if (points.length < 2 && Array.isArray(historyData) && historyData.length) {
+    points = historyData
+      .filter(e => e.date >= cutoff && e.value > 0)
+      .map(e => ({ date: e.date, value: e.value }));
+  }
 
   if (points.length < 2) {
     if (lineChart) { lineChart.destroy(); lineChart = null; }
