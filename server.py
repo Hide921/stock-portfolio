@@ -3,10 +3,12 @@ import sys
 import re
 import json
 import math
+import secrets
 import logging
 import threading
 import webbrowser
 import concurrent.futures
+from urllib.parse import urlparse
 
 import time
 import requests as req
@@ -94,6 +96,41 @@ _YF_API_HEADERS = {
     'Accept': 'application/json',
     'Accept-Language': 'en-US,en;q=0.9',
 }
+
+_ALLOWED_PROXY_HOSTS = {
+    'query1.finance.yahoo.com',
+    'query2.finance.yahoo.com',
+    'finance.yahoo.com',
+    'finance.yahoo.co.jp',
+}
+
+
+def _require_internal_api_key() -> tuple[bool, tuple | None]:
+    """Protect sensitive server-side endpoints with a shared secret header.
+
+    Required env var:
+      INTERNAL_API_KEY
+    Required header:
+      X-Internal-Key
+    """
+    expected = os.environ.get('INTERNAL_API_KEY', '').strip()
+    if not expected:
+        return False, (jsonify({'error': 'INTERNAL_API_KEY が未設定です'}), 503)
+    provided = request.headers.get('X-Internal-Key', '').strip()
+    if not provided or not secrets.compare_digest(provided, expected):
+        return False, (jsonify({'error': 'unauthorized'}), 401)
+    return True, None
+
+
+def _is_allowed_proxy_url(url: str) -> bool:
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if p.scheme not in {'http', 'https'}:
+        return False
+    host = (p.hostname or '').lower()
+    return host in _ALLOWED_PROXY_HOSTS
 
 def fetch_price_via_chart_api(ticker: str) -> dict:
     """Yahoo Finance Chart API を直接叩いて現在価格を取得（yfinance 非依存）"""
@@ -310,6 +347,10 @@ def data_store():
     POST → 受け取ったデータを Gist に保存
     環境変数: GITHUB_PAT, GIST_ID
     """
+    ok, err = _require_internal_api_key()
+    if not ok:
+        return err
+
     pat     = os.environ.get('GITHUB_PAT', '')
     gist_id = os.environ.get('GIST_ID', '')
 
@@ -353,6 +394,10 @@ def take_snapshot():
     """
     from datetime import date as _date
 
+    ok, err = _require_internal_api_key()
+    if not ok:
+        return err
+
     pat     = os.environ.get('GITHUB_PAT', '')
     gist_id = os.environ.get('GIST_ID', '')
     if not pat or not gist_id:
@@ -393,13 +438,20 @@ def take_snapshot():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(_fetch, t): t for t in tickers + ['USDJPY=X']}
-        for fut in concurrent.futures.as_completed(futs, timeout=90):
-            t = futs[fut]
-            try:
-                _, d = fut.result(timeout=30)
-                prices[t] = d
-            except Exception as e:
-                logging.warning(f'SNAPSHOT price err {t}: {e}')
+        try:
+            for fut in concurrent.futures.as_completed(futs, timeout=90):
+                t = futs[fut]
+                try:
+                    _, d = fut.result(timeout=30)
+                    prices[t] = d
+                except Exception as e:
+                    logging.warning(f'SNAPSHOT price err {t}: {e}')
+        except concurrent.futures.TimeoutError:
+            logging.warning('SNAPSHOT price fetch timeout: partial data will be used')
+            for fut, t in futs.items():
+                if not fut.done():
+                    fut.cancel()
+                    logging.warning(f'SNAPSHOT price timeout {t}')
 
     # ── 3. 円換算合計（現物のみ）を計算 ──
     usdjpy = safe_float((prices.get('USDJPY=X') or {}).get('price')) or 150.0
@@ -452,8 +504,8 @@ def proxy():
     url = request.args.get('url', '').strip()
     if not url:
         return jsonify({'error': 'url required'}), 400
-    # Yahoo Finance 以外への転送は禁止
-    if 'yahoo.com' not in url and 'yahoo.co.jp' not in url:
+    # Yahoo Finance の許可済みホスト以外への転送は禁止
+    if not _is_allowed_proxy_url(url):
         return jsonify({'error': 'forbidden'}), 403
     try:
         r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
@@ -497,14 +549,24 @@ def get_prices():
     # 並列取得 + 1銘柄あたり30秒タイムアウト
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as ex:
         futures = {ex.submit(fetch_one, t): t for t in tickers}
-        for fut in concurrent.futures.as_completed(futures, timeout=60):
-            t = futures[fut]
-            try:
-                _, data = fut.result(timeout=30)
-                result[t] = data
-            except Exception as e:
-                logging.warning(f'ERR  {t}: {e}')
-                result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': str(e)}
+        try:
+            for fut in concurrent.futures.as_completed(futures, timeout=60):
+                t = futures[fut]
+                try:
+                    _, data = fut.result(timeout=30)
+                    result[t] = data
+                except Exception as e:
+                    logging.warning(f'ERR  {t}: {e}')
+                    result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': str(e)}
+        except concurrent.futures.TimeoutError:
+            logging.warning('PRICE fetch timeout: return partial result')
+
+        for fut, t in futures.items():
+            if fut.done():
+                continue
+            fut.cancel()
+            if t not in result:
+                result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': 'timeout'}
 
     return jsonify(result)
 

@@ -520,7 +520,18 @@
 const API_BASE = (() => {
   const h = window.location.hostname;
   if (h === 'localhost' || h === '127.0.0.1') return ''; // ローカル: 相対パス
-  // GitHub Pages などの本番環境: Render にデプロイした URL
+
+  // 本番では URL を上書き可能にする（query > global > localStorage > default）
+  const q = new URLSearchParams(window.location.search).get('api') || '';
+  const g = typeof window.__API_BASE__ === 'string' ? window.__API_BASE__.trim() : '';
+  let s = '';
+  try { s = (localStorage.getItem('api_base_url') || '').trim(); } catch(e) {}
+  if (q) {
+    try { localStorage.setItem('api_base_url', q); } catch(e) {}
+    return q;
+  }
+  if (g) return g;
+  if (s) return s;
   return 'https://stock-portfolio-1-2rnh.onrender.com';
 })();
 
@@ -954,8 +965,8 @@ function gistHeaders() {
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
-  // RenderまたはGist どちらかあれば保存
-  if (!API_BASE && (!syncCfg.pat || !syncCfg.gistId)) return;
+  // ユーザーのGist接続がある場合のみ保存
+  if (!syncCfg.pat || !syncCfg.gistId) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => gistSave(true), 2000);
 }
@@ -968,21 +979,8 @@ async function gistSave(silent = false) {
 
   const savePayload = { stocks, log: portfolioLog };
 
-  // ① Render /api/data（サーバー側でGistを管理・PATは環境変数）
-  if (API_BASE) {
-    try {
-      const res = await fetch(`${API_BASE}/api/data`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(savePayload),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) saved = true;
-    } catch(e) {}
-  }
-
-  // ② 直接Gist（バックアップ / Render未設定時）
-  if (!saved && syncCfg.pat && syncCfg.gistId) {
+  // 直接Gistへ保存（ユーザーPAT）
+  if (syncCfg.pat && syncCfg.gistId) {
     try {
       const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
         method: 'PATCH',
@@ -1010,19 +1008,8 @@ async function gistLoad(silent = false) {
     return { stocks: json.stocks || [], log: json.log || [] };
   }
 
-  // ① Render /api/data（サーバー側でGistを管理）
-  if (API_BASE) {
-    try {
-      const res = await fetch(`${API_BASE}/api/data`, { signal: AbortSignal.timeout(15000) });
-      if (res.ok) {
-        const json = await res.json();
-        data = parsePayload(json);
-      }
-    } catch(e) {}
-  }
-
-  // ② 直接Gist（バックアップ / Render未設定時）
-  if (!data && syncCfg.pat && syncCfg.gistId) {
+  // 直接Gistから読込（ユーザーPAT）
+  if (syncCfg.pat && syncCfg.gistId) {
     try {
       const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
       if (res.ok) {
@@ -1299,8 +1286,8 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 // 起動時にクラウドからデータを読み込む
-// Render /api/data（優先）または直接Gist（バックアップ）どちらかあれば実行
-if (API_BASE || (syncCfg.pat && syncCfg.gistId)) {
+// ユーザーがGist接続済みなら起動時に読込
+if (syncCfg.pat && syncCfg.gistId) {
   updateSyncIcon('syncing');
   setTimeout(() => gistLoad(true), 800);
 }
