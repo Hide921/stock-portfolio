@@ -590,37 +590,52 @@ def get_history():
     fetch_set = list(set(tickers + ['USDJPY=X']))
     result    = {}
 
+    need_fetch = []
     for ticker in fetch_set:
         cached = _cached_hist(ticker, period)
         if cached is not None:
             result[ticker] = cached
             logging.info(f'CACHE HIST {ticker} ({period})')
-            continue
-        try:
-            if is_fund_ticker(ticker):
-                fund_code      = ticker[:-2]
-                data           = get_fund_history_yfjp(fund_code, period)
-                result[ticker] = data
-                logging.info(f'HIST FUND {ticker}: {len(data)} bars ({period})')
-            else:
-                hist = yf_ticker(ticker).history(period=period)
-                if hist.empty:
-                    raise ValueError('データなし')
+        else:
+            need_fetch.append(ticker)
 
-                data = []
-                for dt, row in hist.iterrows():
-                    close = safe_float(row['Close'])
-                    if close is not None:
-                        data.append({'date': dt.strftime('%Y-%m-%d'), 'close': round(close, 4)})
+    def fetch_hist_one(ticker):
+        if is_fund_ticker(ticker):
+            fund_code = ticker[:-2]
+            data = get_fund_history_yfjp(fund_code, period)
+            logging.info(f'HIST FUND {ticker}: {len(data)} bars ({period})')
+        else:
+            hist = yf_ticker(ticker).history(period=period)
+            if hist.empty:
+                raise ValueError('データなし')
+            data = []
+            for dt, row in hist.iterrows():
+                close = safe_float(row['Close'])
+                if close is not None:
+                    data.append({'date': dt.strftime('%Y-%m-%d'), 'close': round(close, 4)})
+            logging.info(f'HIST {ticker}: {len(data)} bars ({period})')
+        return ticker, data
 
-                result[ticker] = data
-                logging.info(f'HIST {ticker}: {len(data)} bars ({period})')
-
-            _store_hist(ticker, period, result[ticker])
-
-        except Exception as e:
-            logging.warning(f'HIST ERR {ticker}: {e}')
-            result[ticker] = []
+    if need_fetch:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(need_fetch), 8)) as ex:
+            futures = {ex.submit(fetch_hist_one, t): t for t in need_fetch}
+            try:
+                for fut in concurrent.futures.as_completed(futures, timeout=60):
+                    t = futures[fut]
+                    try:
+                        _, data = fut.result(timeout=30)
+                        result[t] = data
+                        _store_hist(t, period, data)
+                    except Exception as e:
+                        logging.warning(f'HIST ERR {t}: {e}')
+                        result[t] = []
+            except concurrent.futures.TimeoutError:
+                logging.warning('HIST fetch timeout: return partial result')
+            for fut, t in futures.items():
+                if not fut.done():
+                    fut.cancel()
+                if t not in result:
+                    result[t] = []
 
     return jsonify(result)
 

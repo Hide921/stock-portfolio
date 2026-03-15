@@ -1149,9 +1149,23 @@ async function connectGist() {
       saveSyncCfg();
       updateSyncIcon('ok');
       setSyncModalState('connected');
-      showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nクラウドのデータを読み込んでいます...`);
-      await gistLoad(true);
-      showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nデータを読み込みました。以降は変更時に自動保存されます。`);
+
+      // ローカルにデータがある場合は上書き確認
+      const hasLocalData = stocks.length > 0;
+      const shouldLoad = !hasLocalData || confirm(
+        'クラウド（Gist）にデータが見つかりました。\n\n' +
+        '「OK」→ クラウドのデータでローカルを上書き\n' +
+        '「キャンセル」→ ローカルのデータを保持（クラウドへ保存）'
+      );
+
+      if (shouldLoad) {
+        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nクラウドのデータを読み込んでいます...`);
+        await gistLoad(true);
+        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nデータを読み込みました。以降は変更時に自動保存されます。`);
+      } else {
+        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nローカルのデータを保持します。以降は変更時に自動保存されます。`);
+        await gistSave(true);
+      }
     } else {
       // 新規Gist作成
       const createRes = await fetch(GIST_API, {
