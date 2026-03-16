@@ -114,6 +114,20 @@ _FUND_HEADERS_LIST = [_YFJP_HEADERS]
 # Render などクラウドサーバーからのボット検出を回避できる。
 _cffi_available: bool | None = None  # None=未チェック
 
+_CF_CHALLENGE_MARKERS = (
+    'cf-browser-verification',
+    'Checking your browser',
+    'Just a moment',
+    'cf_chl_opt',
+    'cf-please-wait',
+    '__cf_chl_f_tk',
+)
+
+def _is_cf_challenge(html: str) -> bool:
+    """Cloudflare JS チャレンジページかどうか判定"""
+    return any(m in html for m in _CF_CHALLENGE_MARKERS)
+
+
 def _yfjp_get(url: str, timeout: int = 15):
     """Yahoo Finance Japan への GET。curl_cffi で Chrome TLS 偽装を試みる。"""
     global _cffi_available
@@ -130,15 +144,28 @@ def _yfjp_get(url: str, timeout: int = 15):
                 timeout=timeout,
             )
             _cffi_available = True
+            if _is_cf_challenge(resp.text):
+                logging.warning(f'YFJP curl_cffi: Cloudflare JS challenge detected (status={resp.status_code}) url={url}')
+            else:
+                logging.info(f'YFJP curl_cffi: status={resp.status_code} url={url}')
             return resp
         except ImportError:
             _cffi_available = False
-            logging.debug('curl_cffi not available, falling back to requests')
+            logging.warning('curl_cffi not installed — falling back to requests.Session')
         except Exception as e:
-            logging.debug(f'curl_cffi request failed: {e}')
+            logging.warning(f'curl_cffi request failed ({type(e).__name__}): {e}  url={url}')
 
     # フォールバック: requests + Cookie セッション
-    return _get_yfjp_session().get(url, timeout=timeout)
+    try:
+        resp2 = _get_yfjp_session().get(url, timeout=timeout)
+        if _is_cf_challenge(resp2.text):
+            logging.warning(f'YFJP session: Cloudflare JS challenge detected (status={resp2.status_code}) url={url}')
+        else:
+            logging.info(f'YFJP session: status={resp2.status_code} url={url}')
+        return resp2
+    except Exception as e:
+        logging.warning(f'YFJP session request failed ({type(e).__name__}): {e}  url={url}')
+        raise
 
 
 # ── requests セッション（curl_cffi 不使用時のフォールバック）────
@@ -819,7 +846,12 @@ def proxy():
     if not _is_allowed_proxy_url(url):
         return jsonify({'error': 'forbidden'}), 403
     try:
-        r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
+        # Yahoo Finance Japan HTML は curl_cffi で TLS 偽装リクエスト
+        parsed = urlparse(url)
+        if (parsed.hostname or '').endswith('finance.yahoo.co.jp'):
+            r = _yfjp_get(url, timeout=15)
+        else:
+            r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
         content_type = r.headers.get('Content-Type', 'application/json')
         return Response(r.content, status=r.status_code, content_type=content_type)
     except Exception as e:
