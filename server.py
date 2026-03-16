@@ -490,14 +490,71 @@ def _fetch_fund_price_via_quote_api(ticker: str) -> dict:
     raise ValueError(f'quote API で価格取得失敗: {ticker}')
 
 
-def get_fund_price_yfjp(fund_code: str) -> dict:
-    """投資信託の基準価額を取得（5段階フォールバック）
+def _fetch_minkabu_price(fund_code: str) -> dict:
+    """みんかぶ投資信託 (itf.minkabu.jp) から基準価額を取得。
+    Yahoo Finance Japan が Cloudflare でブロックされる場合のフォールバック。
+    同じ8桁ファンドコードが使えるため、別コード変換不要。
+    """
+    url = f'https://itf.minkabu.jp/fund/{fund_code}'
+    r = req.get(url, headers={
+        'User-Agent':      _YFJP_HEADERS['User-Agent'],
+        'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer':         'https://itf.minkabu.jp/',
+    }, timeout=15)
+    if r.status_code == 404:
+        raise ValueError(f'minkabu: {fund_code} が見つかりません')
+    r.raise_for_status()
+    html = r.text
 
-    方式0: Yahoo Finance US Quote API（Renderなど米国サーバーで最安定）
+    price: float | None = None
+    change = 0.0
+    nav_date: str | None = None
+
+    # ── 方式A: meta description から取得（最も安定）───────────────
+    # <meta name="description" content="...基準価額60673円、前日比-1174(-1.9%)...">
+    mm = re.search(r'name="description"[^>]*content="([^"]{30,})"', html, re.IGNORECASE)
+    if not mm:
+        mm = re.search(r'content="([^"]{30,})"[^>]*name="description"', html, re.IGNORECASE)
+    if mm:
+        meta = mm.group(1)
+        mp = re.search(r'(\d{4,6})', meta)   # 最初の4〜6桁 = 基準価額
+        if mp:
+            price = float(mp.group(1))
+            # 価格の後ろに負の変動額が続くことが多い
+            mc = re.search(r'-(\d{1,5})(?:\D|$)', meta[mp.end():mp.end() + 60])
+            if mc:
+                change = -float(mc.group(1))
+
+    # ── 方式B: HTML body から取得（フォールバック）────────────────
+    if price is None:
+        for pat in (
+            r'class="[^"]*font-bold[^"]*text-2xl[^"]*"[^>]*>\s*([\d,]+)',
+            r'class="[^"]*text-2xl[^"]*font-bold[^"]*"[^>]*>\s*([\d,]+)',
+            r'(\d{4,6})\s*\xe5\x86\x86',  # UTF-8 "円"
+        ):
+            m = re.search(pat, html)
+            if m:
+                price = float(m.group(1).replace(',', ''))
+                break
+
+    if price is None or price <= 0:
+        raise ValueError(f'minkabu: 基準価額を解析できません ({fund_code})')
+
+    nav_date = None  # みんかぶは日付の信頼できるパターンがないため省略
+
+    logging.info(f'FUND (minkabu) {fund_code}: {price} JPY (前日比 {change:+.0f}) date={nav_date}')
+    return _build_fund_result(price, change, 'minkabu', fund_code, nav_date)
+
+
+def get_fund_price_yfjp(fund_code: str) -> dict:
+    """投資信託の基準価額を取得（6段階フォールバック）
+
+    方式0: Yahoo Finance US Quote API
     方式1: Yahoo Finance JP __PRELOADED_STATE__ 複数パス探索
     方式2: Yahoo Finance JP HTML 正規表現 / __NEXT_DATA__
     方式3: Yahoo Finance US Chart API (.T ティッカー)
-    ※ 方式1/2 の前に複数 User-Agent でリトライ
+    方式4: みんかぶ投資信託 (Cloudflare 非依存)
     """
     ticker = f'{fund_code}.T'
 
@@ -535,7 +592,11 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
                 time.sleep(1.5 * (attempt + 1))
 
     if html is None:
-        # HTML 取得自体が全試行失敗 → Chart API にかける
+        # HTML 取得自体が全試行失敗 → みんかぶ → Chart API の順で試す
+        try:
+            return _fetch_minkabu_price(fund_code)
+        except Exception as e:
+            logging.debug(f'FUND minkabu(no-html) failed {fund_code}: {e}')
         try:
             result = fetch_price_via_chart_api(f'{fund_code}.T')
             logging.info(f'FUND (chart_api/no-html) {fund_code}: {result["price"]}')
@@ -586,6 +647,12 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
         return result
     except Exception as e:
         logging.debug(f'FUND chart_api failed {fund_code}: {e}')
+
+    # ── 方式4: みんかぶ投資信託 (Cloudflare 非依存フォールバック) ──
+    try:
+        return _fetch_minkabu_price(fund_code)
+    except Exception as e:
+        logging.debug(f'FUND minkabu failed {fund_code}: {e}')
 
     raise ValueError(f'基準価額取得失敗 ({fund_code}): 全方式が失敗しました')
 
