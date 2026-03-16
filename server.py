@@ -87,38 +87,47 @@ _YF_JP_HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 }
 
-# 複数のUser-Agentを用意してボット検出回避に使う
-_FUND_HEADERS_LIST = [
-    {   # Chrome (Windows) – Primary
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/124.0.0.0 Safari/537.36'
-        ),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ja-JP,ja;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-    },
-    {   # Safari (macOS) – Fallback
-        'User-Agent': (
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) '
-            'AppleWebKit/605.1.15 (KHTML, like Gecko) '
-            'Version/17.0 Safari/605.1.15'
-        ),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ja-JP,ja;q=0.9',
-    },
-    {   # Firefox (Windows) – Fallback 2
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) '
-            'Gecko/20100101 Firefox/125.0'
-        ),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
-    },
-]
+# Yahoo Finance Japan 用ブラウザ風ヘッダー（ボット検出回避）
+_YFJP_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    ),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-User': '?1',
+    'Connection': 'keep-alive',
+}
+
+#後方互換のため _FUND_HEADERS_LIST も維持
+_FUND_HEADERS_LIST = [_YFJP_HEADERS]
+
+# ── Yahoo Finance Japan セッション（Cookie を保持してボット回避）──
+_yfjp_session: req.Session | None = None
+_yfjp_session_ts: float = 0.0
+_YFJP_SESSION_TTL = 1800  # 30分でセッション再作成
+
+def _get_yfjp_session() -> req.Session:
+    """Cookie 付きセッションを返す。TTL 超過時は再初期化してホームを訪問。"""
+    global _yfjp_session, _yfjp_session_ts
+    if _yfjp_session is None or time.time() - _yfjp_session_ts > _YFJP_SESSION_TTL:
+        s = req.Session()
+        s.headers.update(_YFJP_HEADERS)
+        try:
+            # ホームページを先に訪問して Cookie を取得（ボット判定回避）
+            s.get('https://finance.yahoo.co.jp/', timeout=10)
+            logging.info('YFJP session initialized (cookie acquired)')
+        except Exception as e:
+            logging.debug(f'YFJP session init failed: {e}')
+        _yfjp_session = s
+        _yfjp_session_ts = time.time()
+    return _yfjp_session
 
 _YF_API_HEADERS = {
     'User-Agent': (
@@ -410,12 +419,19 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
     url  = f'https://finance.yahoo.co.jp/quote/{fund_code}'
     html = None
 
-    # ── HTML 取得（複数 User-Agent でリトライ）────────────────────
-    for attempt, headers in enumerate(_FUND_HEADERS_LIST):
+    # ── HTML 取得（Cookie セッション + リトライ）─────────────────
+    for attempt in range(3):
         try:
-            r = req.get(url, headers=headers, timeout=15)
+            sess = _get_yfjp_session()
+            r = sess.get(url, timeout=15)
             if r.status_code == 404:
                 raise ValueError(f'ファンド {fund_code} が見つかりません (404)')
+            if r.status_code in (403, 429):
+                # セッションリセットして再試行
+                global _yfjp_session, _yfjp_session_ts
+                _yfjp_session = None
+                _yfjp_session_ts = 0.0
+                raise IOError(f'HTTP {r.status_code}')
             r.raise_for_status()
             html = r.text
             break
@@ -423,8 +439,8 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
             raise   # 404 は即エラー
         except Exception as e:
             logging.debug(f'FUND fetch attempt {attempt+1} failed {fund_code}: {e}')
-            if attempt < len(_FUND_HEADERS_LIST) - 1:
-                time.sleep(1.0)
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
 
     if html is None:
         # HTML 取得自体が全試行失敗 → Chart API にかける
@@ -488,9 +504,9 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
 
     # ── 方式1: チャートページの __PRELOADED_STATE__ ──────────────
     chart_url = f'https://finance.yahoo.co.jp/quote/{fund_code}/chart'
-    for headers in _FUND_HEADERS_LIST[:2]:
+    for _ in range(2):
         try:
-            r = req.get(chart_url, headers=headers, timeout=15)
+            r = _get_yfjp_session().get(chart_url, timeout=15)
             r.raise_for_status()
             state = _extract_preloaded_state(r.text)
             chart = (state.get('mainFundChart') or
