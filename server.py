@@ -128,24 +128,55 @@ def _is_cf_challenge(html: str) -> bool:
     return any(m in html for m in _CF_CHALLENGE_MARKERS)
 
 
+# ── curl_cffi Session（Cookie 付き）─────────────────────────────────
+# Cookieなしリクエストは Yahoo Finance Japan が HTTP 500 を返すことがある。
+# Session でホームページを先に訪問してCookieを取得しておく。
+_cffi_session = None
+_cffi_session_ts: float = 0.0
+_CFFI_SESSION_TTL = 1800
+
+
+def _get_cffi_session():
+    """curl_cffi Session を返す。未初期化または期限切れなら再構築。"""
+    global _cffi_session, _cffi_session_ts
+    if _cffi_session is not None and time.time() - _cffi_session_ts < _CFFI_SESSION_TTL:
+        return _cffi_session
+    try:
+        from curl_cffi import requests as cffi_req  # type: ignore
+        s = cffi_req.Session(impersonate='chrome124')
+        s.headers.update({
+            'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        })
+        # ホームページを訪問してCookieを取得
+        try:
+            s.get('https://finance.yahoo.co.jp/', timeout=10)
+            logging.info('YFJP cffi session initialized (cookie acquired)')
+        except Exception as e:
+            logging.warning(f'YFJP cffi home page failed: {e}')
+        _cffi_session = s
+        _cffi_session_ts = time.time()
+        return s
+    except ImportError:
+        return None
+
+
 def _yfjp_get(url: str, timeout: int = 15):
-    """Yahoo Finance Japan への GET。curl_cffi で Chrome TLS 偽装を試みる。"""
+    """Yahoo Finance Japan への GET。curl_cffi Session で Cookie + TLS 偽装。"""
     global _cffi_available
     if _cffi_available is not False:
         try:
-            from curl_cffi import requests as cffi_req  # type: ignore
-            resp = cffi_req.get(
+            s = _get_cffi_session()
+            if s is None:
+                raise ImportError('curl_cffi not available')
+            resp = s.get(
                 url,
-                impersonate='chrome124',
-                headers={
-                    'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
-                    'Referer': 'https://finance.yahoo.co.jp/',
-                },
+                headers={'Referer': 'https://finance.yahoo.co.jp/'},
                 timeout=timeout,
             )
             _cffi_available = True
             if _is_cf_challenge(resp.text):
-                logging.warning(f'YFJP curl_cffi: Cloudflare JS challenge detected (status={resp.status_code}) url={url}')
+                logging.warning(f'YFJP curl_cffi: Cloudflare JS challenge (status={resp.status_code}) url={url}')
             else:
                 logging.info(f'YFJP curl_cffi: status={resp.status_code} url={url}')
             return resp
@@ -154,12 +185,16 @@ def _yfjp_get(url: str, timeout: int = 15):
             logging.warning('curl_cffi not installed — falling back to requests.Session')
         except Exception as e:
             logging.warning(f'curl_cffi request failed ({type(e).__name__}): {e}  url={url}')
+            # セッションをリセットして次回再構築
+            global _cffi_session, _cffi_session_ts
+            _cffi_session = None
+            _cffi_session_ts = 0.0
 
     # フォールバック: requests + Cookie セッション
     try:
         resp2 = _get_yfjp_session().get(url, timeout=timeout)
         if _is_cf_challenge(resp2.text):
-            logging.warning(f'YFJP session: Cloudflare JS challenge detected (status={resp2.status_code}) url={url}')
+            logging.warning(f'YFJP session: Cloudflare JS challenge (status={resp2.status_code}) url={url}')
         else:
             logging.info(f'YFJP session: status={resp2.status_code} url={url}')
         return resp2
