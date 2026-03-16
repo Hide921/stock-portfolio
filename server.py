@@ -87,6 +87,39 @@ _YF_JP_HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 }
 
+# 複数のUser-Agentを用意してボット検出回避に使う
+_FUND_HEADERS_LIST = [
+    {   # Chrome (Windows) – Primary
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ja-JP,ja;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    },
+    {   # Safari (macOS) – Fallback
+        'User-Agent': (
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) '
+            'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+            'Version/17.0 Safari/605.1.15'
+        ),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ja-JP,ja;q=0.9',
+    },
+    {   # Firefox (Windows) – Fallback 2
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) '
+            'Gecko/20100101 Firefox/125.0'
+        ),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+    },
+]
+
 _YF_API_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -220,68 +253,255 @@ def _extract_preloaded_state(html: str) -> dict:
         raise ValueError(f'JSON パースエラー: {e}')
 
 
+# __PRELOADED_STATE__ 内で基準価額が存在しうるJSONパス候補（優先順）
+_FUND_STATE_PATHS: list[list[str]] = [
+    ['mainFundPriceBoard', 'fundPrices'],
+    ['fundPriceBoard',     'fundPrices'],
+    ['priceBoard',         'fundPrices'],
+    ['mainFundPriceBoard'],
+    ['fundPriceBoard'],
+    ['priceBoard'],
+    ['mainQuote',          'quote'],
+    ['quote'],
+]
+
+# 価格・変動キー候補
+_PRICE_KEYS  = ('price', 'currentPrice', 'nav', 'basePrice', 'regularMarketPrice')
+_CHANGE_KEYS = ('changePrice', 'change', 'priceChange', 'diff', 'regularMarketChange')
+
+
+def _price_from_obj(obj: dict) -> tuple[str | None, str]:
+    """dict から価格文字列と変動文字列を取り出す"""
+    if not isinstance(obj, dict):
+        return None, '0'
+    for pk in _PRICE_KEYS:
+        val = obj.get(pk)
+        if val is not None and str(val).replace(',', '').replace('.', '').lstrip('-').isdigit():
+            change_val = '0'
+            for ck in _CHANGE_KEYS:
+                cv = obj.get(ck)
+                if cv is not None:
+                    change_val = str(cv)
+                    break
+            return str(val), change_val
+    return None, '0'
+
+
+def _deep_search_price(obj, depth: int = 0) -> tuple[str | None, str]:
+    """state オブジェクトを再帰的に探索してファンド価格を見つける（最大深さ6）"""
+    if depth > 6 or not isinstance(obj, dict):
+        return None, '0'
+    p, c = _price_from_obj(obj)
+    if p:
+        return p, c
+    for child in obj.values():
+        if isinstance(child, dict):
+            p, c = _deep_search_price(child, depth + 1)
+            if p:
+                return p, c
+    return None, '0'
+
+
+def _parse_fund_price_from_html(html: str) -> tuple[float | None, float]:
+    """HTML 内の JSON パターンから価格を正規表現で抽出（最終手段）"""
+    # __NEXT_DATA__ (Next.js SSR) を試みる
+    m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+            props = data.get('props', {}).get('pageProps', data)
+            p_str, c_str = _deep_search_price(props)
+            if p_str:
+                return (float(p_str.replace(',', '')),
+                        float(str(c_str).replace('△', '-').replace(',', '')))
+        except Exception:
+            pass
+
+    # JSON文字列中の価格パターン (例: "price":"12,345" / "price":12345)
+    price_pats = [
+        r'"(?:price|basePrice|nav|currentPrice)"\s*:\s*"([\d,]+(?:\.\d+)?)"',
+        r'"(?:price|basePrice|nav|currentPrice)"\s*:\s*([\d]+(?:\.\d+)?)',
+    ]
+    change_pats = [
+        r'"(?:changePrice|priceChange|change|diff)"\s*:\s*"([△▲\-\+]?[\d,]+(?:\.\d+)?)"',
+        r'"(?:changePrice|priceChange|change|diff)"\s*:\s*([△▲\-\+]?[\d]+(?:\.\d+)?)',
+    ]
+    price  = None
+    change = 0.0
+    for pat in price_pats:
+        m2 = re.search(pat, html)
+        if m2:
+            try:
+                v = float(m2.group(1).replace(',', ''))
+                if v > 0:
+                    price = v
+                    break
+            except Exception:
+                pass
+    if price:
+        for pat in change_pats:
+            m2 = re.search(pat, html)
+            if m2:
+                try:
+                    change = float(str(m2.group(1)).replace('△', '-').replace('▲', '-').replace(',', ''))
+                    break
+                except Exception:
+                    pass
+    return price, change
+
+
+def _build_fund_result(price: float, change: float, source: str, fund_code: str) -> dict:
+    prev = round(price - change, 4)
+    logging.info(f'FUND ({source}) {fund_code}: {price} JPY (前日比 {change:+.4f})')
+    return {'price': price, 'prev_close': prev, 'day_change': change, 'currency': 'JPY', 'error': None}
+
+
 def get_fund_price_yfjp(fund_code: str) -> dict:
-    """Yahoo Finance Japan から投資信託の基準価額を取得"""
-    url = f'https://finance.yahoo.co.jp/quote/{fund_code}'
-    r = req.get(url, headers=_YF_JP_HEADERS, timeout=15)
-    if r.status_code == 404:
-        raise ValueError(f'ファンド {fund_code} が見つかりません (404)')
-    r.raise_for_status()
+    """Yahoo Finance Japan から投資信託の基準価額を取得（4段階フォールバック）
 
-    state       = _extract_preloaded_state(r.text)
-    board       = state.get('mainFundPriceBoard', {})
-    fund_prices = board.get('fundPrices', {})
-    price_str   = fund_prices.get('price', '')
-    change_str  = fund_prices.get('changePrice', '0') or '0'
+    方式1: __PRELOADED_STATE__ 複数パス探索
+    方式2: HTML 正規表現 / __NEXT_DATA__
+    方式3: Yahoo Finance US Chart API (.T ティッカー)
+    ※ 各方式の前に複数 User-Agent でリトライ
+    """
+    url  = f'https://finance.yahoo.co.jp/quote/{fund_code}'
+    html = None
 
-    if not price_str:
-        raise ValueError('基準価額が見つかりません')
+    # ── HTML 取得（複数 User-Agent でリトライ）────────────────────
+    for attempt, headers in enumerate(_FUND_HEADERS_LIST):
+        try:
+            r = req.get(url, headers=headers, timeout=15)
+            if r.status_code == 404:
+                raise ValueError(f'ファンド {fund_code} が見つかりません (404)')
+            r.raise_for_status()
+            html = r.text
+            break
+        except ValueError:
+            raise   # 404 は即エラー
+        except Exception as e:
+            logging.debug(f'FUND fetch attempt {attempt+1} failed {fund_code}: {e}')
+            if attempt < len(_FUND_HEADERS_LIST) - 1:
+                time.sleep(1.0)
 
-    price  = float(price_str.replace(',', ''))
-    # △はマイナスを表す日本語記号
-    change = float(change_str.replace('△', '-').replace(',', ''))
-    prev   = round(price - change, 4)
+    if html is None:
+        # HTML 取得自体が全試行失敗 → Chart API にかける
+        try:
+            result = fetch_price_via_chart_api(f'{fund_code}.T')
+            logging.info(f'FUND (chart_api/no-html) {fund_code}: {result["price"]}')
+            return result
+        except Exception as e:
+            raise ValueError(f'基準価額取得失敗 ({fund_code}): HTML取得もChart APIも失敗: {e}')
 
-    logging.info(f'FUND {fund_code}: {price} JPY (前日比 {change:+.0f})')
-    return {
-        'price':      price,
-        'prev_close': prev,
-        'day_change': change,
-        'currency':   'JPY',
-        'error':      None,
-    }
+    # ── 方式1: __PRELOADED_STATE__ ───────────────────────────────
+    try:
+        state = _extract_preloaded_state(html)
+        price_str, change_str = None, '0'
+
+        # 候補パスを順に試行
+        for path in _FUND_STATE_PATHS:
+            obj = state
+            for key in path:
+                obj = obj.get(key, {}) if isinstance(obj, dict) else {}
+            p, c = _price_from_obj(obj)
+            if p:
+                price_str, change_str = p, c
+                break
+
+        # パスで見つからなければ再帰探索
+        if not price_str:
+            price_str, change_str = _deep_search_price(state)
+
+        if price_str:
+            price  = float(str(price_str).replace(',', ''))
+            change = float(str(change_str).replace('△', '-').replace('▲', '-').replace(',', ''))
+            return _build_fund_result(price, change, 'state', fund_code)
+    except Exception as e:
+        logging.debug(f'FUND state parse failed {fund_code}: {e}')
+
+    # ── 方式2: HTML 正規表現 / __NEXT_DATA__ ────────────────────
+    try:
+        price, change = _parse_fund_price_from_html(html)
+        if price and price > 0:
+            return _build_fund_result(price, change, 'html-regex', fund_code)
+    except Exception as e:
+        logging.debug(f'FUND html-regex failed {fund_code}: {e}')
+
+    # ── 方式3: Yahoo Finance US Chart API (.T) ───────────────────
+    try:
+        result = fetch_price_via_chart_api(f'{fund_code}.T')
+        logging.info(f'FUND (chart_api) {fund_code}: {result["price"]}')
+        return result
+    except Exception as e:
+        logging.debug(f'FUND chart_api failed {fund_code}: {e}')
+
+    raise ValueError(f'基準価額取得失敗 ({fund_code}): 全方式が失敗しました')
 
 
 def get_fund_history_yfjp(fund_code: str, period: str) -> list:
-    """Yahoo Finance Japan から投資信託の基準価額履歴を取得"""
-    # ページ内の __PRELOADED_STATE__ に chart データが含まれているか試みる
-    url = f'https://finance.yahoo.co.jp/quote/{fund_code}/chart'
-    try:
-        r = req.get(url, headers=_YF_JP_HEADERS, timeout=15)
-        r.raise_for_status()
-        state = _extract_preloaded_state(r.text)
-        # チャートデータのパスを探す
-        chart = (state.get('mainFundChart') or
-                 state.get('mainChart') or
-                 state.get('fundChart') or {})
-        series = chart.get('series') or chart.get('data') or []
-        if series:
-            result = []
-            for pt in series:
-                d = pt.get('date') or pt.get('x') or pt.get('t')
-                c = pt.get('close') or pt.get('y') or pt.get('price')
-                if d and c is not None:
-                    result.append({'date': str(d)[:10], 'close': float(str(c).replace(',', ''))})
-            if result:
-                return result
-    except Exception as e:
-        logging.debug(f'FUND HIST chart page failed for {fund_code}: {e}')
+    """Yahoo Finance Japan から投資信託の基準価額履歴を取得（複数方式フォールバック）"""
+    from datetime import date as _date
 
-    # フォールバック: 現在価格のみ1点返す
+    # ── 方式1: チャートページの __PRELOADED_STATE__ ──────────────
+    chart_url = f'https://finance.yahoo.co.jp/quote/{fund_code}/chart'
+    for headers in _FUND_HEADERS_LIST[:2]:
+        try:
+            r = req.get(chart_url, headers=headers, timeout=15)
+            r.raise_for_status()
+            state = _extract_preloaded_state(r.text)
+            chart = (state.get('mainFundChart') or
+                     state.get('mainChart') or
+                     state.get('fundChart') or {})
+            series = chart.get('series') or chart.get('data') or []
+            if series:
+                result = []
+                for pt in series:
+                    d = pt.get('date') or pt.get('x') or pt.get('t')
+                    c = pt.get('close') or pt.get('y') or pt.get('price')
+                    if d and c is not None:
+                        try:
+                            result.append({'date': str(d)[:10], 'close': float(str(c).replace(',', ''))})
+                        except Exception:
+                            pass
+                if result:
+                    logging.info(f'FUND HIST (state) {fund_code}: {len(result)} bars ({period})')
+                    return result
+        except Exception as e:
+            logging.debug(f'FUND HIST state failed {fund_code}: {e}')
+            time.sleep(0.5)
+
+    # ── 方式2: Yahoo Finance US Chart API (.T) ───────────────────
+    try:
+        import urllib.parse
+        t = urllib.parse.quote(f'{fund_code}.T')
+        _period_map = {'5d': '5d', '1mo': '1mo', '3mo': '3mo', '6mo': '6mo',
+                       '1y': '1y', '2y': '2y', '5y': '5y'}
+        yf_period = _period_map.get(period, '1mo')
+        r = req.get(
+            f'https://query2.finance.yahoo.com/v8/finance/chart/{t}?interval=1d&range={yf_period}',
+            headers=_YF_API_HEADERS, timeout=15
+        )
+        r.raise_for_status()
+        data = r.json()
+        timestamps = data['chart']['result'][0].get('timestamp', [])
+        closes = data['chart']['result'][0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+        result = []
+        for ts, c in zip(timestamps, closes):
+            v = safe_float(c)
+            if v is not None and ts:
+                from datetime import datetime, timezone
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d')
+                result.append({'date': dt, 'close': round(v, 4)})
+        if result:
+            logging.info(f'FUND HIST (chart_api) {fund_code}: {len(result)} bars ({period})')
+            return result
+    except Exception as e:
+        logging.debug(f'FUND HIST chart_api failed {fund_code}: {e}')
+
+    # ── 方式3: 現在価格のみ1点返す ──────────────────────────────
     try:
         p = get_fund_price_yfjp(fund_code)
-        from datetime import date
-        return [{'date': date.today().isoformat(), 'close': p['price']}]
+        logging.info(f'FUND HIST (current-only) {fund_code}: 1 bar')
+        return [{'date': _date.today().isoformat(), 'close': p['price']}]
     except Exception:
         return []
 
