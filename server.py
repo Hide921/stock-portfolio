@@ -350,10 +350,10 @@ def _parse_fund_price_from_html(html: str) -> tuple[float | None, float]:
     return price, change
 
 
-def _build_fund_result(price: float, change: float, source: str, fund_code: str) -> dict:
+def _build_fund_result(price: float, change: float, source: str, fund_code: str, update_date: str | None = None) -> dict:
     prev = round(price - change, 4)
-    logging.info(f'FUND ({source}) {fund_code}: {price} JPY (前日比 {change:+.4f})')
-    return {'price': price, 'prev_close': prev, 'day_change': change, 'currency': 'JPY', 'error': None}
+    logging.info(f'FUND ({source}) {fund_code}: {price} JPY (前日比 {change:+.4f}) updateDate={update_date}')
+    return {'price': price, 'prev_close': prev, 'day_change': change, 'currency': 'JPY', 'error': None, 'nav_date': update_date}
 
 
 def get_fund_price_yfjp(fund_code: str) -> dict:
@@ -395,7 +395,7 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
     # ── 方式1: __PRELOADED_STATE__ ───────────────────────────────
     try:
         state = _extract_preloaded_state(html)
-        price_str, change_str = None, '0'
+        price_str, change_str, update_date = None, '0', None
 
         # 候補パスを順に試行
         for path in _FUND_STATE_PATHS:
@@ -405,6 +405,8 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
             p, c = _price_from_obj(obj)
             if p:
                 price_str, change_str = p, c
+                # updateDate を取得（fundPrices に直接ある場合）
+                update_date = str(obj.get('updateDate') or obj.get('date') or '')  or None
                 break
 
         # パスで見つからなければ再帰探索
@@ -414,7 +416,7 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
         if price_str:
             price  = float(str(price_str).replace(',', ''))
             change = float(str(change_str).replace('△', '-').replace('▲', '-').replace(',', ''))
-            return _build_fund_result(price, change, 'state', fund_code)
+            return _build_fund_result(price, change, 'state', fund_code, update_date)
     except Exception as e:
         logging.debug(f'FUND state parse failed {fund_code}: {e}')
 

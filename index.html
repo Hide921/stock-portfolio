@@ -912,6 +912,7 @@ function migrateStock(s) {
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
   if (!('lastFetched' in s)) s.lastFetched = null;
   if (!('fetchError'  in s)) s.fetchError  = null;
+  if (!('navDate'     in s)) s.navDate     = null;
   if (!('dayChange'  in s)) s.dayChange    = (s.prevClose != null && s.currentPrice != null) ? (s.currentPrice - s.prevClose) : null;
   if (!s.tradeType)          s.tradeType   = 'spot';
   // 万口単位 → 口単位 への一回限りのマイグレーション
@@ -1431,7 +1432,7 @@ async function fetchAllPrices() {
             const price = isFundTicker(t) ? d.price / 10000 : d.price;
             const prev  = isFundTicker(t) && d.prev_close != null ? d.prev_close / 10000 : d.prev_close;
             const dayCh = isFundTicker(t) && d.day_change != null ? d.day_change / 10000 : d.day_change;
-            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY' };
+            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY', nav_date: d.nav_date ?? null };
           });
         }
       } catch(e) {}
@@ -1475,9 +1476,10 @@ async function fetchAllPrices() {
           currency: d.currency || s.currency,
           lastFetched: now,
           fetchError: null,
+          navDate: d.nav_date ?? null,
         };
       }
-      // API失敗 → キャッシュから価格を復元（⚠を出さない）
+      // API失敗 → キャッシュから価格を復元（古いデータであることを示す）
       const cached = cache?.prices?.[s.yahooTicker];
       if (cached?.price) {
         return {
@@ -1485,7 +1487,7 @@ async function fetchAllPrices() {
           currentPrice: cached.price,
           prevClose: null,
           dayChange: null,
-          fetchError: null,
+          fetchError: 'キャッシュ',
         };
       }
       failed++;
@@ -1780,15 +1782,21 @@ function render() {
     const mLabel = s.market === 'FUND' ? '投信' : s.market === 'CRYPTO' ? 'BTC' : s.market;
     const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
     const fetchIcon = s.lastFetched
-      ? (s.fetchError ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
-                      : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
+      ? (s.fetchError === 'キャッシュ'
+          ? `<span class="fetch-err" title="取得失敗のためキャッシュ値を表示">📋</span>`
+          : s.fetchError
+            ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
+            : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
+      : '';
+    const navDateHtml = (s.market === 'FUND' && s.navDate)
+      ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">基準日: ${esc(s.navDate)}</div>`
       : '';
     return `<tr>
       <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}</div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
       <td>${fmtPrice(s.avgPrice, s.currency)}</td>
-      <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}</td>
+      <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}${navDateHtml}</td>
       <td>${fmtPrice(value, s.currency)}</td>
       <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
       <td class="${plClass(pl)}">${fmtPL(pl, s.currency)}</td>
