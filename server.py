@@ -996,6 +996,86 @@ def get_usdjpy():
         return jsonify({'rate': 150.0, 'error': str(e)})
 
 
+@app.route('/api/debug/fund')
+def debug_fund():
+    """GET /api/debug/fund?code=0131103C
+    Render上での投資信託価格取得の詳細診断。
+    各方式を順に試して結果を返す（セキュリティ上 INTERNAL_API_KEY 必須）。
+    """
+    ok, err = _require_internal_api_key()
+    if not ok:
+        return err
+
+    fund_code = request.args.get('code', '0131103C').strip()
+    ticker    = f'{fund_code}.T'
+    results   = {}
+
+    # 1. curl_cffi 利用可否
+    try:
+        from curl_cffi import requests as cffi_req  # type: ignore
+        results['curl_cffi_available'] = True
+        results['curl_cffi_version']   = getattr(cffi_req, '__version__', 'unknown')
+    except ImportError as e:
+        results['curl_cffi_available'] = False
+        results['curl_cffi_error']     = str(e)
+
+    # 2. curl_cffi で Yahoo Finance Japan に接続
+    url = f'https://finance.yahoo.co.jp/quote/{fund_code}'
+    try:
+        from curl_cffi import requests as cffi_req  # type: ignore
+        r = cffi_req.get(
+            url,
+            impersonate='chrome124',
+            headers={'Accept-Language': 'ja-JP,ja;q=0.9', 'Referer': 'https://finance.yahoo.co.jp/'},
+            timeout=15,
+        )
+        has_state = '__PRELOADED_STATE__' in r.text
+        results['cffi_fetch'] = {
+            'status': r.status_code,
+            'has_preloaded_state': has_state,
+            'body_head': r.text[:300],
+        }
+    except Exception as e:
+        results['cffi_fetch'] = {'error': str(e)}
+
+    # 3. requests.Session で Yahoo Finance Japan に接続
+    try:
+        s = req.Session()
+        s.headers.update(_YFJP_HEADERS)
+        r2 = s.get(url, timeout=15)
+        has_state2 = '__PRELOADED_STATE__' in r2.text
+        results['session_fetch'] = {
+            'status': r2.status_code,
+            'has_preloaded_state': has_state2,
+            'body_head': r2.text[:300],
+        }
+    except Exception as e:
+        results['session_fetch'] = {'error': str(e)}
+
+    # 4. Yahoo Finance US Chart API
+    try:
+        import urllib.parse
+        r3 = req.get(
+            f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=2d',
+            headers=_YF_API_HEADERS, timeout=15,
+        )
+        results['chart_api'] = {
+            'status': r3.status_code,
+            'body_head': r3.text[:300],
+        }
+    except Exception as e:
+        results['chart_api'] = {'error': str(e)}
+
+    # 5. 実際の価格取得
+    try:
+        data = get_fund_price_yfjp(fund_code)
+        results['price_result'] = data
+    except Exception as e:
+        results['price_result'] = {'error': str(e)}
+
+    return jsonify(results)
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == '__main__':
     port      = int(os.environ.get('PORT', 5001))
