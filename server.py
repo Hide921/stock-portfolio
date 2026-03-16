@@ -108,19 +108,50 @@ _YFJP_HEADERS = {
 #後方互換のため _FUND_HEADERS_LIST も維持
 _FUND_HEADERS_LIST = [_YFJP_HEADERS]
 
-# ── Yahoo Finance Japan セッション（Cookie を保持してボット回避）──
+# ── Yahoo Finance Japan リクエスト（TLS フィンガープリント偽装）──
+# curl_cffi は yfinance の依存ライブラリとしてインストール済み。
+# Chrome の TLS ハンドシェイクを完全再現するため、
+# Render などクラウドサーバーからのボット検出を回避できる。
+_cffi_available: bool | None = None  # None=未チェック
+
+def _yfjp_get(url: str, timeout: int = 15):
+    """Yahoo Finance Japan への GET。curl_cffi で Chrome TLS 偽装を試みる。"""
+    global _cffi_available
+    if _cffi_available is not False:
+        try:
+            from curl_cffi import requests as cffi_req  # type: ignore
+            resp = cffi_req.get(
+                url,
+                impersonate='chrome124',
+                headers={
+                    'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
+                    'Referer': 'https://finance.yahoo.co.jp/',
+                },
+                timeout=timeout,
+            )
+            _cffi_available = True
+            return resp
+        except ImportError:
+            _cffi_available = False
+            logging.debug('curl_cffi not available, falling back to requests')
+        except Exception as e:
+            logging.debug(f'curl_cffi request failed: {e}')
+
+    # フォールバック: requests + Cookie セッション
+    return _get_yfjp_session().get(url, timeout=timeout)
+
+
+# ── requests セッション（curl_cffi 不使用時のフォールバック）────
 _yfjp_session: req.Session | None = None
 _yfjp_session_ts: float = 0.0
-_YFJP_SESSION_TTL = 1800  # 30分でセッション再作成
+_YFJP_SESSION_TTL = 1800
 
 def _get_yfjp_session() -> req.Session:
-    """Cookie 付きセッションを返す。TTL 超過時は再初期化してホームを訪問。"""
     global _yfjp_session, _yfjp_session_ts
     if _yfjp_session is None or time.time() - _yfjp_session_ts > _YFJP_SESSION_TTL:
         s = req.Session()
         s.headers.update(_YFJP_HEADERS)
         try:
-            # ホームページを先に訪問して Cookie を取得（ボット判定回避）
             s.get('https://finance.yahoo.co.jp/', timeout=10)
             logging.info('YFJP session initialized (cookie acquired)')
         except Exception as e:
@@ -419,11 +450,10 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
     url  = f'https://finance.yahoo.co.jp/quote/{fund_code}'
     html = None
 
-    # ── HTML 取得（Cookie セッション + リトライ）─────────────────
+    # ── HTML 取得（curl_cffi TLS 偽装 + リトライ）───────────────
     for attempt in range(3):
         try:
-            sess = _get_yfjp_session()
-            r = sess.get(url, timeout=15)
+            r = _yfjp_get(url, timeout=15)
             if r.status_code == 404:
                 raise ValueError(f'ファンド {fund_code} が見つかりません (404)')
             if r.status_code in (403, 429):
@@ -436,7 +466,7 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
             html = r.text
             break
         except ValueError:
-            raise   # 404 は即エラー
+            raise
         except Exception as e:
             logging.debug(f'FUND fetch attempt {attempt+1} failed {fund_code}: {e}')
             if attempt < 2:
@@ -506,7 +536,7 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
     chart_url = f'https://finance.yahoo.co.jp/quote/{fund_code}/chart'
     for _ in range(2):
         try:
-            r = _get_yfjp_session().get(chart_url, timeout=15)
+            r = _yfjp_get(chart_url, timeout=15)
             r.raise_for_status()
             state = _extract_preloaded_state(r.text)
             chart = (state.get('mainFundChart') or
