@@ -356,14 +356,57 @@ def _build_fund_result(price: float, change: float, source: str, fund_code: str,
     return {'price': price, 'prev_close': prev, 'day_change': change, 'currency': 'JPY', 'error': None, 'nav_date': update_date}
 
 
-def get_fund_price_yfjp(fund_code: str) -> dict:
-    """Yahoo Finance Japan から投資信託の基準価額を取得（4段階フォールバック）
+def _fetch_fund_price_via_quote_api(ticker: str) -> dict:
+    """Yahoo Finance US の /v7/finance/quote で投資信託価格を取得。
+    Render など米国サーバーからでも安定して動作する。"""
+    import urllib.parse as _up
+    for host in ('query1', 'query2'):
+        try:
+            url = f'https://{host}.finance.yahoo.com/v7/finance/quote?symbols={_up.quote(ticker)}'
+            r = req.get(url, headers=_YF_API_HEADERS, timeout=12)
+            r.raise_for_status()
+            result = r.json().get('quoteResponse', {}).get('result', [])
+            if not result:
+                continue
+            q = result[0]
+            price = safe_float(q.get('regularMarketPrice'))
+            if price is None:
+                continue
+            change    = safe_float(q.get('regularMarketChange'))
+            prev      = safe_float(q.get('regularMarketPreviousClose'))
+            currency  = q.get('currency') or 'JPY'
+            return {
+                'price':      price,
+                'prev_close': prev,
+                'day_change': change,
+                'currency':   currency,
+                'error':      None,
+                'nav_date':   None,
+            }
+        except Exception as e:
+            logging.debug(f'FUND quote_api {host} failed {ticker}: {e}')
+    raise ValueError(f'quote API で価格取得失敗: {ticker}')
 
-    方式1: __PRELOADED_STATE__ 複数パス探索
-    方式2: HTML 正規表現 / __NEXT_DATA__
+
+def get_fund_price_yfjp(fund_code: str) -> dict:
+    """投資信託の基準価額を取得（5段階フォールバック）
+
+    方式0: Yahoo Finance US Quote API（Renderなど米国サーバーで最安定）
+    方式1: Yahoo Finance JP __PRELOADED_STATE__ 複数パス探索
+    方式2: Yahoo Finance JP HTML 正規表現 / __NEXT_DATA__
     方式3: Yahoo Finance US Chart API (.T ティッカー)
-    ※ 各方式の前に複数 User-Agent でリトライ
+    ※ 方式1/2 の前に複数 User-Agent でリトライ
     """
+    ticker = f'{fund_code}.T'
+
+    # ── 方式0: Yahoo Finance US Quote API ────────────────────────
+    try:
+        result = _fetch_fund_price_via_quote_api(ticker)
+        logging.info(f'FUND (quote_api) {fund_code}: {result["price"]}')
+        return result
+    except Exception as e:
+        logging.debug(f'FUND quote_api failed {fund_code}: {e}')
+
     url  = f'https://finance.yahoo.co.jp/quote/{fund_code}'
     html = None
 
