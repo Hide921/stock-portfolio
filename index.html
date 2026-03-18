@@ -919,6 +919,10 @@ function normalizePortfolioLog(log) {
 // ── Migration ─────────────────────────────────────────────────────
 function migrateStock(s) {
   if (!s.yahooTicker)        s.yahooTicker = getYahooTicker(s.ticker, s.market || 'JP');
+  // CRYPTO なのに yahooTicker が -USD で終わっていない場合を修正
+  if (s.market === 'CRYPTO' && s.yahooTicker && !/-USD$/i.test(s.yahooTicker)) {
+    s.yahooTicker = getYahooTicker(s.ticker, 'CRYPTO');
+  }
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
   if (!s.avgCurrency)        s.avgCurrency = s.currency;
   if (!('lastFetched' in s)) s.lastFetched = null;
