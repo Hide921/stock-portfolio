@@ -983,6 +983,7 @@ function scheduleSyncSave() {
 }
 
 async function gistSave(silent = false) {
+  if (!syncCfg.pat || !syncCfg.gistId) return;
   if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
