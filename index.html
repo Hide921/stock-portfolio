@@ -651,7 +651,7 @@ async function yhFetch(ticker, params = '') {
 // CORSプロキシ専用（Renderが失敗した場合のフォールバック）
 async function getCurrentPriceViaCors(ticker) {
   if (isFundTicker(ticker)) return await getCurrentPriceFundJS(ticker);
-  const r    = await yhFetch(ticker, '?interval=1d&range=2d');
+  const r    = await yhFetch(ticker, '?interval=1d&range=5d');
   const meta = r.meta;
   const postPrice = Number.isFinite(meta.postMarketPrice) ? meta.postMarketPrice : null;
   const postChange = Number.isFinite(meta.postMarketChange) ? meta.postMarketChange : null;
@@ -1920,7 +1920,7 @@ async function autoFetchName(ticker, market) {
       }
     } else {
       // 株式: Yahoo Finance US を yhFetch で直接取得 (高速)
-      const r = await yhFetch(yahooTicker, '?interval=1d&range=2d');
+      const r = await yhFetch(yahooTicker, '?interval=1d&range=5d');
       name = r.meta.shortName || r.meta.longName || '';
     }
     if (name && !nameEl.value) nameEl.value = name;
@@ -2149,7 +2149,7 @@ async function fetchImportNames() {
         if (isFundTicker(yahooTicker)) {
           r.name = await getFundNameJS(yahooTicker);
         } else {
-          const result = await yhFetch(yahooTicker, '?interval=1d&range=2d');
+          const result = await yhFetch(yahooTicker, '?interval=1d&range=5d');
           r.name = result.meta.shortName || result.meta.longName || '';
         }
       } catch(e) {

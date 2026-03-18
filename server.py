@@ -270,7 +270,7 @@ def _is_allowed_proxy_url(url: str) -> bool:
 def fetch_price_via_chart_api(ticker: str) -> dict:
     """Yahoo Finance Chart API を直接叩いて現在価格を取得（yfinance 非依存）"""
     import urllib.parse
-    url = f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=2d'
+    url = f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=5d'
     r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
     r.raise_for_status()
     data = r.json()
