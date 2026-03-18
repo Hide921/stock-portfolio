@@ -824,6 +824,7 @@ let stocks        = [];
 let usdJpyRate    = 150;
 let apiOnline     = false;
 let isFetching    = false;
+let isFetchQueued = false;
 let editId        = null;
 let sortKey       = 'value';
 let sortDir       = -1;
@@ -1412,7 +1413,10 @@ async function fetchRate() {
 
 // ── 全銘柄 価格取得 ────────────────────────────────────────────────
 async function fetchAllPrices() {
-  if (isFetching) return;
+  if (isFetching) {
+    if (!isFetchQueued) { isFetchQueued = true; setTimeout(() => { isFetchQueued = false; fetchAllPrices(); }, 1500); }
+    return;
+  }
   isFetching = true;
   const btn = document.getElementById('fetchBtn');
   btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
