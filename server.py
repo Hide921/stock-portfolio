@@ -476,6 +476,11 @@ def _fetch_fund_price_via_quote_api(ticker: str) -> dict:
                 continue
             change    = safe_float(q.get('regularMarketChange'))
             prev      = safe_float(q.get('regularMarketPreviousClose'))
+            # change が未取得の場合は prev_close から逆算
+            if change is None and prev is not None:
+                change = round(price - prev, 4)
+            if prev is None and change is not None:
+                prev = round(price - change, 4)
             currency  = q.get('currency') or 'JPY'
             return {
                 'price':      price,
@@ -521,10 +526,10 @@ def _fetch_minkabu_price(fund_code: str) -> dict:
         mp = re.search(r'(\d{4,6})', meta)   # 最初の4〜6桁 = 基準価額
         if mp:
             price = float(mp.group(1))
-            # 価格の後ろに負の変動額が続くことが多い
-            mc = re.search(r'-(\d{1,5})(?:\D|$)', meta[mp.end():mp.end() + 60])
+            # 「前日比+NNN」「前日比-NNN」の両パターンに対応
+            mc = re.search(r'前日比([+\-]?\d{1,5})', meta)
             if mc:
-                change = -float(mc.group(1))
+                change = float(mc.group(1))
 
     # ── 方式B: HTML body から取得（フォールバック）────────────────
     if price is None:
