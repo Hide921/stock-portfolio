@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="apple-touch-icon" href="favicon.svg">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
       --bg: #0f1117; --surface: #1a1d27; --surface2: #242736; --border: #2e3148;
@@ -260,9 +261,9 @@
     <span id="apiLabel">確認中...</span>
   </div>
   <span class="last-updated" id="lastUpdated"></span>
-  <button class="btn-sync" id="syncBtn" onclick="openSyncModal()" title="クラウド同期設定">
+  <button class="btn-sync" id="syncBtn" onclick="sbLoad(false)" title="クラウドから再読込">
     <span id="syncIcon">☁️</span>
-    <span id="syncStatusText">同期未設定</span>
+    <span id="syncStatusText">接続中...</span>
   </button>
 </header>
 
@@ -459,40 +460,6 @@
   </div>
 </div>
 
-<!-- クラウド同期モーダル -->
-<div class="overlay" id="syncOverlay" onclick="closeSyncModal(event)">
-  <div class="modal">
-    <h2>☁️ クラウド同期 (GitHub Gist)</h2>
-    <div class="sync-instructions">
-      <p style="margin-bottom:8px">GitHub Gistを使ってポートフォリオデータをクラウドに保存し、複数デバイスで共有できます。</p>
-      <ol>
-        <li>
-          <a href="https://github.com/settings/tokens/new?scopes=gist&description=%E6%A0%AA%E5%BC%8F%E3%83%9D%E3%83%BC%E3%83%88%E3%83%95%E3%82%A9%E3%83%AA%E3%82%AA%E5%90%8C%E6%9C%9F" target="_blank" rel="noopener">GitHubでPersonal Access Tokenを作成</a>
-          → <strong>gist</strong> スコープのみ選択してください
-        </li>
-        <li>生成されたトークンを下の欄に貼り付け</li>
-        <li>「接続」をクリック → 以降は自動保存されます</li>
-      </ol>
-    </div>
-    <div class="form-group" style="margin-top:16px">
-      <label>Personal Access Token</label>
-      <div style="position:relative;display:flex;align-items:center">
-        <input type="password" id="syncPAT" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;font-family:monospace;letter-spacing:1px;padding-right:72px">
-        <button type="button" id="syncPATToggle" onclick="togglePATVisibility()" style="position:absolute;right:8px;background:transparent;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;white-space:nowrap" title="表示/非表示">👁 表示</button>
-      </div>
-      <span class="form-hint">トークンはこのデバイスのみに保存されます（外部サーバーへは送信されません）</span>
-    </div>
-    <div id="syncStatusArea" style="display:none;margin-top:12px;padding:10px 14px;border-radius:6px;font-size:12px;white-space:pre-line;line-height:1.6"></div>
-    <div class="modal-actions">
-      <button class="btn-ghost" onclick="closeSyncModal()">閉じる</button>
-      <button class="btn-ghost" id="syncSaveNowBtn" onclick="gistSave(false)" style="display:none">💾 今すぐ保存</button>
-      <button class="btn-ghost" id="syncLoadBtn" onclick="gistLoad(false)" style="display:none">📥 クラウドから読込</button>
-      <button class="btn-ghost" id="syncRecoverBtn" onclick="recoverLogsFromGistHistory()" style="display:none">🩹 ログ復元</button>
-      <button class="btn-ghost" id="syncDisconnectBtn" onclick="disconnectSync()" style="display:none;color:var(--red)">接続解除</button>
-      <button class="btn-primary" id="syncConnectBtn" onclick="connectGist()">接続</button>
-    </div>
-  </div>
-</div>
 
 <!-- インポートモーダル -->
 <div class="overlay" id="importOverlay" onclick="closeImportModal(event)">
@@ -979,125 +946,130 @@ function defaultStocks() {
   ];
 }
 
-// ── クラウド同期 (GitHub Gist) ─────────────────────────────────────
-const GIST_API = 'https://api.github.com/gists';
-let syncCfg   = { pat: '', gistId: '' };
+// ── Supabase クラウド同期 ──────────────────────────────────────────
+const _sb = supabase.createClient(
+  'https://ugyashjjxoezvlnjtizw.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4'
+);
+
+async function _sbGet(key) {
+  const { data } = await _sb.from('user_data').select('value').eq('key', key).maybeSingle();
+  return data?.value ?? null;
+}
+
+async function _sbSet(key, value) {
+  await _sb.from('user_data').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+}
+
 let syncTimer = null;
 let isSyncing = false;
 
-function loadSyncCfg() {
-  try {
-    const raw = localStorage.getItem('syncCfg');
-    if (raw) syncCfg = { ...syncCfg, ...JSON.parse(raw) };
-  } catch(e) {}
-}
-
-function saveSyncCfg() {
-  localStorage.setItem('syncCfg', JSON.stringify(syncCfg));
-}
-
-function gistHeaders() {
-  return {
-    'Authorization': `Bearer ${syncCfg.pat}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-}
-
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
-  // ユーザーのGist接続がある場合のみ保存
-  if (!syncCfg.pat || !syncCfg.gistId) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => gistSave(true), 2000);
+  syncTimer = setTimeout(() => sbSave(true), 2000);
 }
 
-async function gistSave(silent = false) {
-  if (!syncCfg.pat || !syncCfg.gistId) return;
+async function sbSave(silent = false) {
   if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
-  let saved = false;
-
-  const savePayload = { stocks, log: portfolioLog };
-
-  // 直接Gistへ保存（ユーザーPAT）
-  if (syncCfg.pat && syncCfg.gistId) {
-    try {
-      const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, {
-        method: 'PATCH',
-        headers: gistHeaders(),
-        body: JSON.stringify({ files: { 'portfolio.json': { content: JSON.stringify(savePayload, null, 2) } } }),
-      });
-      if (res.ok) saved = true;
-    } catch(e) {}
+  try {
+    await Promise.all([
+      _sbSet('sp_stocks', stocks),
+      _sbSet('sp_portfolio_log', portfolioLog),
+    ]);
+    updateSyncIcon('ok');
+    if (!silent) toast('クラウドに保存しました ☁️', 'success');
+  } catch(e) {
+    updateSyncIcon('error');
+    if (!silent) toast('クラウド保存失敗', 'error');
+    console.error('sbSave error:', e);
   }
-
-  updateSyncIcon(saved ? 'ok' : 'error');
-  if (!silent) toast(saved ? 'クラウドに保存しました ☁️' : 'クラウド保存失敗', saved ? 'success' : 'error');
   isSyncing = false;
 }
 
-async function gistLoad(silent = false) {
+async function _fetchFromGist(pat, gistId) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: { 'Authorization': `Bearer ${pat}`, 'Accept': 'application/vnd.github+json' }
+  });
+  if (!res.ok) return null;
+  const gist = await res.json();
+  const content = gist.files['portfolio.json']?.content;
+  if (!content) return null;
+  const parsed = JSON.parse(content);
+  if (Array.isArray(parsed)) return { stocks: parsed, log: [] };
+  return { stocks: parsed.stocks || [], log: parsed.log || [] };
+}
+
+async function sbLoad(silent = false) {
   if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
-  let data = null;
+  try {
+    const [cloudStocks, cloudLog] = await Promise.all([
+      _sbGet('sp_stocks'),
+      _sbGet('sp_portfolio_log'),
+    ]);
+    const localStocks = JSON.parse(localStorage.getItem('stocks') || '[]');
+    const localLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 
-  // ペイロードをパース（新形式: {stocks,log} / 旧形式: 配列）
-  function parsePayload(json) {
-    if (Array.isArray(json)) return { stocks: json, log: [] };
-    return { stocks: json.stocks || [], log: json.log || [] };
-  }
-
-  // 直接Gistから読込（ユーザーPAT）
-  if (syncCfg.pat && syncCfg.gistId) {
+    // 旧Gist設定が残っていればGistからデータを取得してSupabaseへ移行
+    let gistData = null;
     try {
-      const res = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
-      if (res.ok) {
-        const gist    = await res.json();
-        const content = gist.files['portfolio.json']?.content;
-        if (content) data = parsePayload(JSON.parse(content));
+      const oldCfg = JSON.parse(localStorage.getItem('syncCfg') || '{}');
+      if (oldCfg.pat && oldCfg.gistId) {
+        gistData = await _fetchFromGist(oldCfg.pat, oldCfg.gistId);
+        if (gistData) localStorage.removeItem('syncCfg'); // 移行完了後に削除
       }
     } catch(e) {}
-  }
 
-  if (data) {
-    const cloudLog = normalizePortfolioLog(data.log);
-    const localLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
-    stocks       = data.stocks.map(migrateStock);
-    portfolioLog = mergePortfolioLogs(localLog, cloudLog);
-    recordDailyLog(); // 当日分がなければ現在評価額で補完
-    localStorage.setItem('stocks', JSON.stringify(stocks));
-    localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
-    document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
-    render();
-    renderPieChart();
-    renderLineChart();  // ログ更新後に即時再描画
-    updateSyncIcon('ok');
-    if (!silent) {
-      toast('クラウドからデータを読み込みました ☁️', 'success');
-      showSyncStatus('success', `✓ ${data.stocks.length}件のデータを読み込みました`);
+    // データの優先順: Gist移行データ > クラウド(件数多) > ローカル(件数多)
+    if (gistData && gistData.stocks.length > (cloudStocks?.length || 0)) {
+      stocks       = gistData.stocks.map(migrateStock);
+      portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(gistData.log));
+      recordDailyLog();
+      localStorage.setItem('stocks', JSON.stringify(stocks));
+      localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+      document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+      render();
+      renderPieChart();
+      renderLineChart();
+      await sbSave(true);
+      if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
+    } else if (cloudStocks && cloudStocks.length >= localStocks.length) {
+      stocks       = cloudStocks.map(migrateStock);
+      portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
+      recordDailyLog();
+      localStorage.setItem('stocks', JSON.stringify(stocks));
+      localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+      document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+      render();
+      renderPieChart();
+      renderLineChart();
+      if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
+    } else {
+      // ローカルの方が多い（または初回）→ ローカルをクラウドへ移行
+      await sbSave(true);
+      if (!silent) toast('ローカルデータをクラウドに移行しました', 'success');
     }
-  } else {
+    updateSyncIcon('ok');
+  } catch(e) {
     updateSyncIcon('error');
-    if (!silent) showSyncStatus('error', '読込失敗');
-    else console.warn('Sync load: failed');
+    if (!silent) toast('クラウド読込失敗', 'error');
+    console.error('sbLoad error:', e);
   }
   isSyncing = false;
 }
 
+// ── (削除済みのGist関連コード用スタブ) ─────────────────────────────
 async function recoverLogsFromGistHistory() {
-  if (isSyncing) return;
-  if (!syncCfg.pat || !syncCfg.gistId) {
-    showSyncStatus('error', '先にクラウド同期へ接続してください');
-    return;
-  }
+  toast('この機能はSupabase移行により廃止されました', 'error');
+  return;
 
+  if (isSyncing) return;
   isSyncing = true;
   updateSyncIcon('syncing');
-  showSyncStatus('info', 'Gist履歴からログを探索しています...');
 
   let shouldPushRecoveredLog = false;
 
@@ -1148,102 +1120,8 @@ async function recoverLogsFromGistHistory() {
     toast('ログ復元に失敗しました', 'error');
   } finally {
     isSyncing = false;
-    if (shouldPushRecoveredLog) gistSave(true);
+    if (shouldPushRecoveredLog) sbSave(true);
   }
-}
-
-function togglePATVisibility() {
-  const input  = document.getElementById('syncPAT');
-  const btn    = document.getElementById('syncPATToggle');
-  const isHide = input.type === 'password';
-  input.type   = isHide ? 'text' : 'password';
-  btn.textContent = isHide ? '🙈 隠す' : '👁 表示';
-  // 接続済みの場合、表示↔マスク を切り替える
-  if (syncCfg.pat && syncCfg.gistId) {
-    input.value = isHide ? syncCfg.pat : '•'.repeat(20);
-  }
-}
-
-async function connectGist() {
-  const patInput = document.getElementById('syncPAT');
-  const pat = patInput.value.trim();
-  if (!pat || pat.includes('•')) {
-    showSyncStatus('error', 'トークンを入力してください');
-    return;
-  }
-
-  const btn = document.getElementById('syncConnectBtn');
-  btn.disabled = true;
-  btn.textContent = '接続中...';
-  showSyncStatus('info', '接続を確認中...');
-  syncCfg.pat = pat;
-
-  try {
-    // PAT検証 & 既存Gistを検索
-    const listRes = await fetch(GIST_API + '?per_page=100', { headers: gistHeaders() });
-    if (!listRes.ok) throw new Error('認証失敗。トークンが無効か、gistスコープがありません。');
-
-    const gists    = await listRes.json();
-    const existing = gists.find(g => g.files['portfolio.json'] && g.description === '株式ポートフォリオデータ');
-
-    if (existing) {
-      // 既存Gistと接続
-      syncCfg.gistId = existing.id;
-      saveSyncCfg();
-      updateSyncIcon('ok');
-      setSyncModalState('connected');
-
-      // ローカルにデータがある場合は上書き確認
-      const hasLocalData = stocks.length > 0;
-      const shouldLoad = !hasLocalData || confirm(
-        'クラウド（Gist）にデータが見つかりました。\n\n' +
-        '「OK」→ クラウドのデータでローカルを上書き\n' +
-        '「キャンセル」→ ローカルのデータを保持（クラウドへ保存）'
-      );
-
-      if (shouldLoad) {
-        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nクラウドのデータを読み込んでいます...`);
-        await gistLoad(true);
-        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nデータを読み込みました。以降は変更時に自動保存されます。`);
-      } else {
-        showSyncStatus('success', `✓ 既存Gistと接続しました\nGist ID: ${existing.id.slice(0, 10)}...\n\nローカルのデータを保持します。以降は変更時に自動保存されます。`);
-        await gistSave(true);
-      }
-    } else {
-      // 新規Gist作成
-      const createRes = await fetch(GIST_API, {
-        method: 'POST',
-        headers: gistHeaders(),
-        body: JSON.stringify({
-          description: '株式ポートフォリオデータ',
-          public: false,
-          files: { 'portfolio.json': { content: JSON.stringify({ stocks, log: portfolioLog }, null, 2) } },
-        }),
-      });
-      if (!createRes.ok) throw new Error('Gist作成失敗');
-      const gist = await createRes.json();
-      syncCfg.gistId = gist.id;
-      saveSyncCfg();
-      updateSyncIcon('ok');
-      setSyncModalState('connected');
-      showSyncStatus('success', `✓ 新しいGistを作成しました\nGist ID: ${gist.id.slice(0, 10)}...\n\n現在のデータを保存済み。以降は変更時に自動保存されます。`);
-    }
-  } catch(e) {
-    showSyncStatus('error', e.message);
-    btn.disabled = false;
-    btn.textContent = '接続';
-    syncCfg.pat = '';
-  }
-}
-
-function disconnectSync() {
-  if (!confirm('クラウド同期の接続を解除しますか？\n（Gistのデータは削除されません）')) return;
-  syncCfg = { pat: '', gistId: '' };
-  saveSyncCfg();
-  updateSyncIcon('none');
-  setSyncModalState('disconnected');
-  document.getElementById('syncPAT').value = '';
-  showSyncStatus('info', '接続を解除しました');
 }
 
 function updateSyncIcon(state) {
@@ -1255,71 +1133,15 @@ function updateSyncIcon(state) {
     case 'ok':      icon.textContent = '☁️'; text.textContent = '同期済み';   btn.classList.add('synced');     break;
     case 'syncing': icon.textContent = '🔄'; text.textContent = '同期中...';  btn.classList.add('syncing');    break;
     case 'error':   icon.textContent = '⚠️'; text.textContent = '同期エラー'; btn.classList.add('sync-error'); break;
-    default:        icon.textContent = '☁️'; text.textContent = '同期未設定'; break;
+    default:        icon.textContent = '☁️'; text.textContent = '接続中...'; break;
   }
-}
-
-function setSyncModalState(state) {
-  const connectBtn    = document.getElementById('syncConnectBtn');
-  const disconnectBtn = document.getElementById('syncDisconnectBtn');
-  const loadBtn       = document.getElementById('syncLoadBtn');
-  const saveNowBtn    = document.getElementById('syncSaveNowBtn');
-  const recoverBtn    = document.getElementById('syncRecoverBtn');
-  if (state === 'connected') {
-    connectBtn.style.display    = 'none';
-    disconnectBtn.style.display = '';
-    loadBtn.style.display       = '';
-    saveNowBtn.style.display    = '';
-    recoverBtn.style.display    = '';
-  } else {
-    connectBtn.style.display    = '';
-    connectBtn.disabled         = false;
-    connectBtn.textContent      = '接続';
-    disconnectBtn.style.display = 'none';
-    loadBtn.style.display       = 'none';
-    saveNowBtn.style.display    = 'none';
-    recoverBtn.style.display    = 'none';
-  }
-}
-
-function showSyncStatus(type, msg) {
-  const el = document.getElementById('syncStatusArea');
-  el.style.display    = 'block';
-  el.style.background = type === 'success' ? 'rgba(34,197,94,0.1)' : type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(79,110,247,0.08)';
-  el.style.borderLeft = `3px solid ${type === 'success' ? 'var(--green)' : type === 'error' ? 'var(--red)' : 'var(--accent)'}`;
-  el.style.color      = type === 'success' ? 'var(--green)' : type === 'error' ? 'var(--red)' : 'var(--text)';
-  el.textContent = msg;
-}
-
-function openSyncModal() {
-  document.getElementById('syncStatusArea').style.display = 'none';
-  // トグルボタンを「隠す」状態にリセット
-  const patInput = document.getElementById('syncPAT');
-  patInput.type  = 'password';
-  document.getElementById('syncPATToggle').textContent = '👁 表示';
-  if (syncCfg.pat && syncCfg.gistId) {
-    patInput.value = '•'.repeat(20);
-    setSyncModalState('connected');
-    showSyncStatus('success', `☁️ クラウド同期が有効です\nGist ID: ${syncCfg.gistId.slice(0, 10)}...\n\nデータ変更時に自動的にクラウドへ保存されます。`);
-  } else {
-    patInput.value = '';
-    setSyncModalState('disconnected');
-  }
-  document.getElementById('syncOverlay').classList.add('open');
-}
-
-function closeSyncModal(e) {
-  if (e && e.target !== document.getElementById('syncOverlay')) return;
-  document.getElementById('syncOverlay').classList.remove('open');
 }
 
 // ── Init ──────────────────────────────────────────────────────────
-loadSyncCfg();
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
-if (!raw.length) save(true);
 
 render();
 renderPieChart();
@@ -1342,12 +1164,9 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// 起動時にクラウドからデータを読み込む
-// ユーザーがGist接続済みなら起動時に読込
-if (syncCfg.pat && syncCfg.gistId) {
-  updateSyncIcon('syncing');
-  setTimeout(() => gistLoad(true), 800);
-}
+// 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
+updateSyncIcon('syncing');
+setTimeout(() => sbLoad(true), 800);
 
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
 const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
@@ -1567,7 +1386,7 @@ async function fetchAllPrices() {
     try { renderPieChart(); } catch(e) { console.warn('renderPieChart error:', e); }
     try { renderLineChart(); } catch(e) { console.warn('renderLineChart error:', e); }
 
-    if (logChanged && updated > 0) gistSave(true); // 当日ログが更新されたら即同期
+    if (logChanged && updated > 0) sbSave(true); // 当日ログが更新されたら即同期
 
     toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
           failed > 0 ? 'error' : 'success');
