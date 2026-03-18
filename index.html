@@ -1895,10 +1895,14 @@ function onAvgCurChange() {
 
 let _nameFetchTimer = null;
 function onTickerInput() {
-  const raw    = document.getElementById('fTicker').value.trim().toUpperCase();
-  const market = detectMarketFromTicker(raw);
-  document.getElementById('fMarket').value = market;
-  onMarketChange();
+  const raw      = document.getElementById('fTicker').value.trim().toUpperCase();
+  const marketEl = document.getElementById('fMarket');
+  // ユーザーが既に JP 以外の市場を選択済みの場合は上書きしない
+  if (marketEl.value === 'JP') {
+    marketEl.value = detectMarketFromTicker(raw);
+    onMarketChange();
+  }
+  const market = marketEl.value;
   clearTimeout(_nameFetchTimer);
   if (raw.length >= 4) {
     _nameFetchTimer = setTimeout(() => autoFetchName(raw, market), 600);
