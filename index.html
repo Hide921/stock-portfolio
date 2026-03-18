@@ -918,6 +918,17 @@ function normalizePortfolioLog(log) {
 
 // ── Migration ─────────────────────────────────────────────────────
 function migrateStock(s) {
+  // 暗号資産の名称→ティッカー変換マップ（誤登録の自動修正用）
+  const _cryptoAliases = { BITCOIN:'BTC', ETHEREUM:'ETH', RIPPLE:'XRP', SOLANA:'SOL', DOGECOIN:'DOGE', CARDANO:'ADA', LITECOIN:'LTC' };
+  const upperTicker = (s.ticker || '').toUpperCase();
+  if (_cryptoAliases[upperTicker] || (/-USD$/i.test(upperTicker) && _cryptoAliases[upperTicker.replace(/-USD$/i,'')])) {
+    const base = _cryptoAliases[upperTicker] || _cryptoAliases[upperTicker.replace(/-USD$/i,'')];
+    s.ticker      = base;
+    s.market      = 'CRYPTO';
+    s.currency    = 'USD';
+    s.yahooTicker = base + '-USD';
+    if (!s.avgCurrency) s.avgCurrency = 'JPY';
+  }
   if (!s.yahooTicker)        s.yahooTicker = getYahooTicker(s.ticker, s.market || 'JP');
   // CRYPTO なのに yahooTicker が -USD で終わっていない場合を修正
   if (s.market === 'CRYPTO' && s.yahooTicker && !/-USD$/i.test(s.yahooTicker)) {
