@@ -425,6 +425,13 @@
         <label id="avgLabel">平均取得価格 *</label>
         <input type="number" id="fAvg" placeholder="2500" min="0" step="0.01">
       </div>
+      <div class="form-group" id="avgCurGroup" style="display:none">
+        <label>取得単価の通貨</label>
+        <select id="fAvgCur" onchange="onAvgCurChange()">
+          <option value="JPY">円建て (JPY)</option>
+          <option value="USD">ドル建て (USD)</option>
+        </select>
+      </div>
       <div class="form-group full">
         <label>メモ</label>
         <input type="text" id="fNote" placeholder="自由記述">
@@ -843,6 +850,8 @@ function getYahooTicker(ticker, market) {
 }
 function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ? 'USD' : 'JPY'; }
 function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
+function getCostJPY(s)       { return toJPY(s.avgPrice * s.quantity, s.avgCurrency || s.currency); }
+function getStockPLJPY(s)    { return toJPY(s.currentPrice * s.quantity, s.currency) - getCostJPY(s); }
 
 function fmtPrice(p, cur) {
   if (p == null) return '—';
@@ -910,6 +919,7 @@ function normalizePortfolioLog(log) {
 function migrateStock(s) {
   if (!s.yahooTicker)        s.yahooTicker = getYahooTicker(s.ticker, s.market || 'JP');
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
+  if (!s.avgCurrency)        s.avgCurrency = s.currency;
   if (!('lastFetched' in s)) s.lastFetched = null;
   if (!('fetchError'  in s)) s.fetchError  = null;
   if (!('navDate'     in s)) s.navDate     = null;
@@ -1691,7 +1701,7 @@ function render() {
     switch (sortKey) {
       case 'ticker':       va = a.ticker; vb = b.ticker; break;
       case 'quantity':     va = a.quantity; vb = b.quantity; break;
-      case 'avgPrice':     va = toJPY(a.avgPrice,     a.currency); vb = toJPY(b.avgPrice,     b.currency); break;
+      case 'avgPrice':     va = toJPY(a.avgPrice, a.avgCurrency||a.currency); vb = toJPY(b.avgPrice, b.avgCurrency||b.currency); break;
       case 'currentPrice': va = toJPY(a.currentPrice, a.currency); vb = toJPY(b.currentPrice, b.currency); break;
       case 'value':        va = toJPY(a.currentPrice * a.quantity, a.currency); vb = toJPY(b.currentPrice * b.quantity, b.currency); break;
       case 'dayPL': {
@@ -1701,8 +1711,8 @@ function render() {
         vb = bDay != null ? toJPY(bDay * b.quantity, b.currency) : -Infinity;
         break;
       }
-      case 'pl':           va = toJPY((a.currentPrice-a.avgPrice)*a.quantity, a.currency); vb = toJPY((b.currentPrice-b.avgPrice)*b.quantity, b.currency); break;
-      case 'plPct':        va = (a.currentPrice-a.avgPrice)/a.avgPrice; vb = (b.currentPrice-b.avgPrice)/b.avgPrice; break;
+      case 'pl':           va = getStockPLJPY(a); vb = getStockPLJPY(b); break;
+      case 'plPct': {      const ac = getCostJPY(a), bc = getCostJPY(b); va = ac ? getStockPLJPY(a)/ac : 0; vb = bc ? getStockPLJPY(b)/bc : 0; break; }
       default:             va = 0; vb = 0;
     }
     return typeof va === 'string' ? sortDir * va.localeCompare(vb) : sortDir * (va - vb);
@@ -1717,11 +1727,11 @@ function render() {
     const unitDayChange = getUnitDayChange(s);
     if (s.tradeType === 'margin') {
       marginValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
-      marginCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
+      marginCostJPY  += getCostJPY(s);
       marginDayPLJPY += unitDayChange != null ? toJPY(unitDayChange * s.quantity, s.currency) : 0;
     } else {
       totalValueJPY += toJPY(s.currentPrice * s.quantity, s.currency);
-      totalCostJPY  += toJPY(s.avgPrice     * s.quantity, s.currency);
+      totalCostJPY  += getCostJPY(s);
       dayPLJPY      += unitDayChange != null ? toJPY(unitDayChange * s.quantity, s.currency) : 0;
     }
     if (unitDayChange != null) {
@@ -1771,9 +1781,13 @@ function render() {
     return;
   }
   tbody.innerHTML = list.map(s => {
-    const value  = s.currentPrice * s.quantity;
-    const pl     = value - s.avgPrice * s.quantity;
-    const plPct  = s.avgPrice ? pl / (s.avgPrice * s.quantity) * 100 : 0;
+    const value    = s.currentPrice * s.quantity;
+    const avgCur   = s.avgCurrency || s.currency;
+    const useJPYpl = avgCur !== s.currency;
+    const pl       = useJPYpl ? null : value - s.avgPrice * s.quantity;
+    const plJPY    = getStockPLJPY(s);
+    const costJPY_ = getCostJPY(s);
+    const plPct    = costJPY_ ? plJPY / costJPY_ * 100 : 0;
     const unitDayChange = getUnitDayChange(s);
     const prevUnit = unitDayChange != null ? (s.currentPrice - unitDayChange) : null;
     const dayChg  = (prevUnit != null && prevUnit > 0) ? (unitDayChange / prevUnit * 100) : null;
@@ -1795,11 +1809,11 @@ function render() {
       <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}</div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
-      <td>${fmtPrice(s.avgPrice, s.currency)}</td>
+      <td>${fmtPrice(s.avgPrice, avgCur)}</td>
       <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}${navDateHtml}</td>
       <td>${fmtPrice(value, s.currency)}</td>
       <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
-      <td class="${plClass(pl)}">${fmtPL(pl, s.currency)}</td>
+      <td class="${plClass(plJPY)}">${useJPYpl ? ((plJPY>=0?'+':'-')+fmtJPY(Math.abs(plJPY))) : fmtPL(pl, s.currency)}</td>
       <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
       <td><div class="actions">
         <button class="btn-edit"   onclick="editStock('${s.id}')">編集</button>
@@ -1837,6 +1851,9 @@ function openModal(id = null) {
   document.getElementById('fAvg').value     = s?.avgPrice || '';
   document.getElementById('fNote').value    = s?.note || '';
   document.getElementById('nameHint').style.display = 'none';
+  if ((s?.market || 'JP') === 'CRYPTO') {
+    document.getElementById('fAvgCur').value = s?.avgCurrency || 'JPY';
+  }
   onMarketChange();
   document.getElementById('overlay').classList.add('open');
   document.getElementById('fTicker').focus();
@@ -1859,8 +1876,16 @@ function onMarketChange() {
   const hints  = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁 (例: 0131103C)', CRYPTO:'仮想通貨ティッカー (例: BTC)' };
   document.getElementById('tickerHint').textContent = hints[market] || '';
   document.getElementById('qtyLabel').textContent   = market === 'FUND' ? '口数 *' : market === 'CRYPTO' ? '保有数量 (枚) *' : '保有数量 (株) *';
-  document.getElementById('avgLabel').textContent   = market === 'FUND' ? '平均取得価格 (円/口) *' : `平均取得価格 (${cur==='USD'?'$':'¥'}) *`;
+  const showAvgCur = market === 'CRYPTO';
+  document.getElementById('avgCurGroup').style.display = showAvgCur ? '' : 'none';
+  if (!showAvgCur) document.getElementById('fAvgCur').value = cur;
+  const avgCur = showAvgCur ? document.getElementById('fAvgCur').value : cur;
+  document.getElementById('avgLabel').textContent   = market === 'FUND' ? '平均取得価格 (円/口) *' : `平均取得価格 (${avgCur==='USD'?'$':'¥'}) *`;
   document.getElementById('fundNote').classList.toggle('visible', market === 'FUND');
+}
+function onAvgCurChange() {
+  const avgCur = document.getElementById('fAvgCur').value;
+  document.getElementById('avgLabel').textContent = `平均取得価格 (${avgCur==='USD'?'$':'¥'}) *`;
 }
 
 let _nameFetchTimer = null;
@@ -1917,17 +1942,19 @@ function saveStock() {
   if (!ticker || !name || isNaN(qty) || isNaN(avg)) { toast('必須項目を入力してください', 'error'); return; }
   if (qty <= 0 || avg <= 0) { toast('数量と価格は正の値を入力してください', 'error'); return; }
 
-  const yahooTicker = getYahooTicker(ticker, market);
-  const currency    = getCurrency(market);
+  const yahooTicker  = getYahooTicker(ticker, market);
+  const currency     = getCurrency(market);
+  const avgCurrency  = market === 'CRYPTO' ? document.getElementById('fAvgCur').value : currency;
   const isNew = !editId;
 
   if (editId) {
     const idx = stocks.findIndex(s => s.id === editId);
-    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, note };
+    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, note };
     toast('銘柄を更新しました', 'success');
   } else {
     if (stocks.find(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
-    stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, sector, currency, quantity: qty, avgPrice: avg, currentPrice: avg, prevClose: null, dayChange: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
+    const initPrice = avgCurrency !== currency ? null : avg;
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, currentPrice: initPrice, prevClose: null, dayChange: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
     toast(`${ticker} を追加しました`, 'success');
   }
 
@@ -2171,12 +2198,11 @@ function exportCSV() {
   const marketLabel = { JP:'日本株', US:'米国株', FUND:'投資信託', CRYPTO:'暗号資産' };
 
   const rows = stocks.map(s => {
-    const value   = s.currentPrice * s.quantity;
-    const cost    = s.avgPrice     * s.quantity;
-    const pl      = value - cost;
-    const plPct   = cost ? pl / cost * 100 : 0;
+    const value    = s.currentPrice * s.quantity;
     const valueJPY = toJPY(value, s.currency);
-    const plJPY   = toJPY(pl,    s.currency);
+    const costJPY_ = getCostJPY(s);
+    const plJPY    = valueJPY - costJPY_;
+    const plPct    = costJPY_ ? plJPY / costJPY_ * 100 : 0;
     const qty     = s.market === 'FUND' ? s.quantity : s.quantity;
     return [
       s.ticker,
