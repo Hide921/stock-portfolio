@@ -969,9 +969,11 @@ async function _sbSet(key, value) {
 let syncTimer = null;
 let isSyncing = false;
 let lastCloudUpdatedAt = null; // クラウドの最終更新日時（ポーリング用）
+let initialLoadDone = false;  // 起動時sbLoad完了フラグ
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
+  if (!initialLoadDone) return; // 起動時sbLoad完了前はアップロードしない
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => sbSave(true), 500);
 }
@@ -1085,6 +1087,7 @@ async function sbLoad(silent = false) {
     console.error('sbLoad error:', e);
   } finally {
     isSyncing = false;
+    initialLoadDone = true; // 起動時sbLoad完了 → 以降のsave()はアップロード可能
   }
 }
 
