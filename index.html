@@ -1040,10 +1040,11 @@ async function sbLoad(silent = false) {
       }
     } catch(e) {}
 
-    // クラウドが最新かどうか: タイムスタンプ優先、なければ件数比較
-    const cloudIsNewer = cloudUpdatedAt && lastCloudUpdatedAt
-      ? cloudUpdatedAt > lastCloudUpdatedAt
-      : cloudStocks && cloudStocks.length >= localStocks.length;
+    // クラウドが最新かどうか: タイムスタンプで判断（件数は使わない）
+    const localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+    const cloudIsNewer = cloudUpdatedAt && localUpdatedAt
+      ? cloudUpdatedAt > localUpdatedAt
+      : !!cloudStocks; // タイムスタンプがない場合のみクラウド優先
 
     // データの優先順: Gist移行データ > クラウド(新しい/件数多) > ローカル
     if (gistData && gistData.stocks.length > (cloudStocks?.length || 0)) {
@@ -1091,11 +1092,11 @@ async function smartSync() {
   updateSyncIcon('syncing');
   try {
     const row = await _sbGet('sp_stocks');
-    const cloudCount = row?.value?.length ?? 0;
     const cloudUpdatedAt = row?.updated_at ?? null;
-    const isCloudNewer = cloudUpdatedAt && lastCloudUpdatedAt
-      ? cloudUpdatedAt > lastCloudUpdatedAt
-      : cloudCount > stocks.length;
+    const localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+    const isCloudNewer = cloudUpdatedAt && localUpdatedAt
+      ? cloudUpdatedAt > localUpdatedAt
+      : !!row?.value;
     if (isCloudNewer) {
       await sbLoad(false); // クラウドが新しい → ダウンロード
     } else {
@@ -1264,9 +1265,13 @@ function cacheAgeText(ts) {
 }
 
 // ── Persistence ───────────────────────────────────────────────────
+const LOCAL_UPDATED_AT_KEY = 'stocks_updated_at';
+
 function save(skipSync = false) {
+  const now = new Date().toISOString();
   localStorage.setItem('stocks', JSON.stringify(stocks));
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+  localStorage.setItem(LOCAL_UPDATED_AT_KEY, now);
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   if (!skipSync) scheduleSyncSave();
