@@ -529,7 +529,7 @@
       <span style="font-size:13px;color:var(--text-muted)">現物総額: <strong id="rbTotalValue">—</strong></span>
       <span class="rb-remaining" id="rbRemaining">残り 0%</span>
     </div>
-    <p class="rebalance-note">現物保有のみを対象に、目標配分(%)を入力して売買株数を試算します。信用・価格未取得の銘柄は除外されます。</p>
+    <p class="rebalance-note">現物株式・暗号資産のみを対象に、目標配分(%)を入力して売買株数を試算します。投資信託・信用・価格未取得の銘柄は除外されます。</p>
     <div class="rebalance-table-wrap">
       <table class="rebalance-table">
         <thead>
@@ -2259,7 +2259,7 @@ function closeRebalanceModal(e) {
 }
 
 function _rbSpotStocks() {
-  return stocks.filter(s => s.tradeType !== 'margin' && s.currentPrice && s.currentPrice > 0);
+  return stocks.filter(s => s.tradeType !== 'margin' && s.market !== 'FUND' && s.currentPrice && s.currentPrice > 0);
 }
 
 function _rbValueJPY(s) {
