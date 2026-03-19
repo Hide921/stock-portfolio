@@ -1020,7 +1020,10 @@ async function _sbGetUpdatedAt(key) {
 }
 
 async function _sbSet(key, value) {
-  await _sb.from('user_data').upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  const { data } = await _sb.from('user_data')
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+    .select('updated_at').single();
+  return data?.updated_at ?? null;
 }
 
 let syncTimer = null;
@@ -1036,12 +1039,14 @@ function scheduleSyncSave() {
 }
 
 async function _doSave() {
-  const now = new Date().toISOString();
-  await Promise.all([
+  const [stocksTs] = await Promise.all([
     _sbSet('sp_stocks', stocks),
     _sbSet('sp_portfolio_log', portfolioLog),
   ]);
-  lastCloudUpdatedAt = now;
+  // サーバー側の実際のタイムスタンプを使う（ローカル時刻とのズレを防ぐ）
+  const savedAt = stocksTs || new Date().toISOString();
+  lastCloudUpdatedAt = savedAt;
+  localStorage.setItem(LOCAL_UPDATED_AT_KEY, savedAt);
 }
 
 async function sbSave(silent = false) {
@@ -1151,22 +1156,27 @@ async function sbLoad(silent = false) {
 // ☁️ボタン: クラウドとローカルを比較して新しい方を優先
 async function smartSync() {
   if (isSyncing) return;
+  isSyncing = true;
   updateSyncIcon('syncing');
+  let cloudUpdatedAt = null;
   try {
     const row = await _sbGet('sp_stocks');
-    const cloudUpdatedAt = row?.updated_at ?? null;
-    const localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
-    const isCloudNewer = cloudUpdatedAt && localUpdatedAt
-      ? cloudUpdatedAt > localUpdatedAt
-      : !!row?.value;
-    if (isCloudNewer) {
-      await sbLoad(false); // クラウドが新しい → ダウンロード
-    } else {
-      await sbSave(false); // ローカルが新しい → アップロード
-    }
+    cloudUpdatedAt = row?.updated_at ?? null;
   } catch(e) {
+    isSyncing = false;
     updateSyncIcon('error');
     toast('同期失敗', 'error');
+    return;
+  }
+  isSyncing = false; // sbLoad/sbSave が自前でisSyncingを管理するため解放
+  const localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+  const isCloudNewer = cloudUpdatedAt && localUpdatedAt
+    ? cloudUpdatedAt > localUpdatedAt
+    : !!cloudUpdatedAt;
+  if (isCloudNewer) {
+    await sbLoad(false); // クラウドが新しい → ダウンロード
+  } else {
+    await sbSave(false); // ローカルが新しい → アップロード
   }
 }
 
@@ -1174,9 +1184,10 @@ async function smartSync() {
 async function pollCloudChanges() {
   if (isSyncing) return;
   try {
-    const updatedAt = await _sbGetUpdatedAt('sp_stocks');
-    if (updatedAt && updatedAt !== lastCloudUpdatedAt) {
-      // クラウドが更新されている → サイレントで取得
+    const cloudTs = await _sbGetUpdatedAt('sp_stocks');
+    const localTs = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+    // ローカルタイムスタンプと比較（サーバー時刻ベースで判断）
+    if (cloudTs && (!localTs || cloudTs > localTs)) {
       await sbLoad(true);
     }
   } catch(e) {
