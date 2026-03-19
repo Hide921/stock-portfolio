@@ -1058,6 +1058,7 @@ async function sbLoad(silent = false) {
       renderPieChart();
       renderLineChart();
       await _doSave();
+      localStorage.setItem(LOCAL_UPDATED_AT_KEY, lastCloudUpdatedAt || new Date().toISOString());
       if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
     } else if (cloudStocks && cloudIsNewer) {
       stocks       = cloudStocks.map(migrateStock);
@@ -1066,6 +1067,7 @@ async function sbLoad(silent = false) {
       lastCloudUpdatedAt = cloudUpdatedAt;
       localStorage.setItem('stocks', JSON.stringify(stocks));
       localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+      localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
       document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
       render();
       renderPieChart();
