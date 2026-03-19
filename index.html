@@ -163,6 +163,26 @@
     .importing-name { color: var(--text-muted); font-style: italic; font-size: 11px; }
     .import-name-done { color: var(--green); }
 
+    /* ── Rebalance Modal ── */
+    .rebalance-modal { width: 820px; }
+    .rebalance-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+    .rebalance-header strong { color: var(--text); font-weight: 700; }
+    .rb-remaining { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 20px; border: 1px solid; }
+    .rb-ok   { color: var(--green);  background: rgba(34,197,94,0.1);  border-color: rgba(34,197,94,0.3); }
+    .rb-warn { color: var(--yellow); background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); }
+    .rebalance-table-wrap { overflow-x: auto; max-height: 52vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+    .rebalance-table { width: 100%; border-collapse: collapse; }
+    .rebalance-table th { background: var(--surface2); padding: 9px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+    .rebalance-table td { padding: 10px 12px; border-top: 1px solid var(--border); white-space: nowrap; font-size: 13px; }
+    .rebalance-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .rb-target-input { width: 72px; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 13px; text-align: right; outline: none; transition: border-color 0.15s; }
+    .rb-target-input:focus { border-color: var(--accent); }
+    .rb-buy  { color: var(--green); font-weight: 600; }
+    .rb-sell { color: var(--red);   font-weight: 600; }
+    .rb-zero { color: var(--text-muted); }
+    .rebalance-note { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
+    .rb-total-row td { font-weight: 700; background: var(--surface2); border-top: 2px solid var(--border); }
+
     /* ── Toast ── */
     .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
     .toast.show { transform: translateY(0); opacity: 1; }
@@ -367,6 +387,7 @@
     </div>
     <div class="toolbar-left">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
+      <button class="btn-ghost" onclick="openRebalanceModal()">⚖️ リバランス</button>
       <button class="btn-ghost" onclick="openImportModal()">📋 インポート</button>
       <button class="btn-ghost" onclick="exportCSV()">📤 エクスポート</button>
       <button class="btn-primary" onclick="openModal()">+ 銘柄追加</button>
@@ -496,6 +517,39 @@
         <button class="btn-ghost" onclick="showImportStep(1)">← 戻る</button>
         <button class="btn-primary" id="importConfirmBtn" onclick="executeImport()">インポート実行</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- リバランスモーダル -->
+<div class="overlay" id="rebalanceOverlay" onclick="closeRebalanceModal(event)">
+  <div class="modal rebalance-modal">
+    <h2>⚖️ ポートフォリオ リバランス</h2>
+    <div class="rebalance-header">
+      <span style="font-size:13px;color:var(--text-muted)">現物総額: <strong id="rbTotalValue">—</strong></span>
+      <span class="rb-remaining" id="rbRemaining">残り 0%</span>
+    </div>
+    <p class="rebalance-note">現物保有のみを対象に、目標配分(%)を入力して売買株数を試算します。信用・価格未取得の銘柄は除外されます。</p>
+    <div class="rebalance-table-wrap">
+      <table class="rebalance-table">
+        <thead>
+          <tr>
+            <th>銘柄</th>
+            <th>評価額(円)</th>
+            <th>現在%</th>
+            <th>目標%</th>
+            <th>差分%</th>
+            <th>売買額(円)</th>
+            <th>売買数量</th>
+          </tr>
+        </thead>
+        <tbody id="rebalanceTbody"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeRebalanceModal()">閉じる</button>
+      <button class="btn-ghost" onclick="distributeEvenRebalance()">均等配分</button>
+      <button class="btn-primary" onclick="saveRebalanceTargets()">目標を保存</button>
     </div>
   </div>
 </div>
@@ -2186,6 +2240,163 @@ function exportCSV() {
   a.click();
   URL.revokeObjectURL(url);
   toast('CSVをエクスポートしました', 'success');
+}
+
+// ── リバランス ─────────────────────────────────────────────────────
+const REBALANCE_TARGETS_KEY = 'rebalance_targets_v1';
+let rebalanceTargets = {};  // { stockId: targetPct }
+
+function openRebalanceModal() {
+  try { rebalanceTargets = JSON.parse(localStorage.getItem(REBALANCE_TARGETS_KEY) || '{}'); }
+  catch(e) { rebalanceTargets = {}; }
+  _renderRebalance();
+  document.getElementById('rebalanceOverlay').classList.add('open');
+}
+
+function closeRebalanceModal(e) {
+  if (e && e.target !== document.getElementById('rebalanceOverlay')) return;
+  document.getElementById('rebalanceOverlay').classList.remove('open');
+}
+
+function _rbSpotStocks() {
+  return stocks.filter(s => s.tradeType !== 'margin' && s.currentPrice && s.currentPrice > 0);
+}
+
+function _rbValueJPY(s) {
+  return toJPY(s.currentPrice * s.quantity, s.currency);
+}
+
+function _rbSharesStr(s, diffShares) {
+  const abs = Math.abs(diffShares);
+  if (s.market === 'FUND') {
+    return Math.round(diffShares).toLocaleString('ja-JP') + '口';
+  } else if (s.market === 'US' || s.market === 'CRYPTO') {
+    return (diffShares >= 0 ? '+' : '-') + abs.toFixed(2) + '株';
+  } else {
+    return (diffShares >= 0 ? '+' : '') + Math.round(diffShares).toLocaleString('ja-JP') + '株';
+  }
+}
+
+function _rbClass(v) {
+  return Math.abs(v) < 0.005 ? 'rb-zero' : v > 0 ? 'rb-buy' : 'rb-sell';
+}
+
+function _renderRebalance() {
+  const spot   = _rbSpotStocks();
+  const total  = spot.reduce((s, x) => s + _rbValueJPY(x), 0);
+
+  document.getElementById('rbTotalValue').textContent = fmtJPY(total);
+
+  // 目標%のデフォルト: 保存済みがあればそれを使い、なければ現在配分
+  const rows = spot.map(s => {
+    const valueJPY  = _rbValueJPY(s);
+    const currentPct = total > 0 ? valueJPY / total * 100 : 0;
+    const targetPct  = rebalanceTargets[s.id] != null ? rebalanceTargets[s.id] : currentPct;
+    return { s, valueJPY, currentPct, targetPct };
+  });
+
+  _updateRbRemaining(rows);
+
+  const tbody = document.getElementById('rebalanceTbody');
+  tbody.innerHTML = rows.map(({ s, valueJPY, currentPct, targetPct }) => {
+    const diffPct    = targetPct - currentPct;
+    const targetVal  = total * targetPct / 100;
+    const diffVal    = targetVal - valueJPY;
+    const rate       = s.currency === 'USD' ? usdJpyRate : 1;
+    const priceJPY   = s.currentPrice * rate;
+    const diffShares = priceJPY > 0 ? diffVal / priceJPY : 0;
+    const cls        = _rbClass(diffVal);
+    const badgeCls   = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'FUND' ? 'badge-fund' : 'badge-crypto';
+    return `<tr>
+      <td>
+        <div class="ticker">${esc(s.ticker)}<span class="badge ${badgeCls}">${s.market}</span></div>
+        <div class="ticker-name">${esc(s.name)}</div>
+      </td>
+      <td>${fmtJPY(valueJPY)}</td>
+      <td>${currentPct.toFixed(1)}%</td>
+      <td><input type="number" class="rb-target-input" data-id="${s.id}"
+            value="${targetPct.toFixed(1)}" min="0" max="100" step="0.1"
+            oninput="onRbInput('${s.id}',this.value)"></td>
+      <td class="${cls}">${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(1)}%</td>
+      <td class="${cls}">${diffVal >= 0 ? '+' : '-'}${fmtJPY(Math.abs(diffVal))}</td>
+      <td class="${cls}">${_rbSharesStr(s, diffShares)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function onRbInput(id, raw) {
+  rebalanceTargets[id] = parseFloat(raw) || 0;
+  _updateRbCalc();
+}
+
+function _updateRbCalc() {
+  const spot  = _rbSpotStocks();
+  const total = spot.reduce((s, x) => s + _rbValueJPY(x), 0);
+  const rows  = spot.map(s => {
+    const valueJPY   = _rbValueJPY(s);
+    const currentPct = total > 0 ? valueJPY / total * 100 : 0;
+    const targetPct  = rebalanceTargets[s.id] != null ? rebalanceTargets[s.id] : currentPct;
+    return { s, valueJPY, currentPct, targetPct };
+  });
+  _updateRbRemaining(rows);
+
+  rows.forEach(({ s, valueJPY, currentPct, targetPct }) => {
+    const input = document.querySelector(`.rb-target-input[data-id="${s.id}"]`);
+    if (!input) return;
+    const row = input.closest('tr');
+    const cells = row.querySelectorAll('td');
+    const diffPct    = targetPct - currentPct;
+    const targetVal  = total * targetPct / 100;
+    const diffVal    = targetVal - valueJPY;
+    const rate       = s.currency === 'USD' ? usdJpyRate : 1;
+    const priceJPY   = s.currentPrice * rate;
+    const diffShares = priceJPY > 0 ? diffVal / priceJPY : 0;
+    const cls        = _rbClass(diffVal);
+    cells[4].className = cls;
+    cells[4].textContent = (diffPct >= 0 ? '+' : '') + diffPct.toFixed(1) + '%';
+    cells[5].className = cls;
+    cells[5].textContent = (diffVal >= 0 ? '+' : '-') + fmtJPY(Math.abs(diffVal));
+    cells[6].className = cls;
+    cells[6].textContent = _rbSharesStr(s, diffShares);
+  });
+}
+
+function _updateRbRemaining(rows) {
+  const sumTarget = rows.reduce((acc, r) => {
+    const id  = r.s.id;
+    const pct = rebalanceTargets[id] != null ? rebalanceTargets[id] : r.currentPct;
+    return acc + pct;
+  }, 0);
+  const rem = 100 - sumTarget;
+  const el  = document.getElementById('rbRemaining');
+  if (Math.abs(rem) < 0.05) {
+    el.textContent = '✓ 合計 100%';
+    el.className = 'rb-remaining rb-ok';
+  } else {
+    el.textContent = `残り ${rem >= 0 ? '' : ''}${rem.toFixed(1)}%`;
+    el.className = 'rb-remaining rb-warn';
+  }
+}
+
+function distributeEvenRebalance() {
+  const spot = _rbSpotStocks();
+  if (!spot.length) return;
+  const even = Math.round(1000 / spot.length) / 10;  // 0.1%単位
+  spot.forEach(s => {
+    rebalanceTargets[s.id] = even;
+    const inp = document.querySelector(`.rb-target-input[data-id="${s.id}"]`);
+    if (inp) inp.value = even.toFixed(1);
+  });
+  _updateRbCalc();
+}
+
+function saveRebalanceTargets() {
+  try {
+    localStorage.setItem(REBALANCE_TARGETS_KEY, JSON.stringify(rebalanceTargets));
+    toast('目標配分を保存しました', 'success');
+  } catch(e) {
+    toast('保存に失敗しました', 'error');
+  }
 }
 
 // ── トースト ──────────────────────────────────────────────────────
