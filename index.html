@@ -953,8 +953,13 @@ const _sb = supabase.createClient(
 );
 
 async function _sbGet(key) {
-  const { data } = await _sb.from('user_data').select('value').eq('key', key).maybeSingle();
-  return data?.value ?? null;
+  const { data } = await _sb.from('user_data').select('value,updated_at').eq('key', key).maybeSingle();
+  return data ?? null;
+}
+
+async function _sbGetUpdatedAt(key) {
+  const { data } = await _sb.from('user_data').select('updated_at').eq('key', key).maybeSingle();
+  return data?.updated_at ?? null;
 }
 
 async function _sbSet(key, value) {
@@ -963,11 +968,21 @@ async function _sbSet(key, value) {
 
 let syncTimer = null;
 let isSyncing = false;
+let lastCloudUpdatedAt = null; // クラウドの最終更新日時（ポーリング用）
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => sbSave(true), 2000);
+  syncTimer = setTimeout(() => sbSave(true), 500);
+}
+
+async function _doSave() {
+  const now = new Date().toISOString();
+  await Promise.all([
+    _sbSet('sp_stocks', stocks),
+    _sbSet('sp_portfolio_log', portfolioLog),
+  ]);
+  lastCloudUpdatedAt = now;
 }
 
 async function sbSave(silent = false) {
@@ -975,18 +990,16 @@ async function sbSave(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    await Promise.all([
-      _sbSet('sp_stocks', stocks),
-      _sbSet('sp_portfolio_log', portfolioLog),
-    ]);
+    await _doSave();
     updateSyncIcon('ok');
     if (!silent) toast('クラウドに保存しました ☁️', 'success');
   } catch(e) {
     updateSyncIcon('error');
     if (!silent) toast('クラウド保存失敗', 'error');
     console.error('sbSave error:', e);
+  } finally {
+    isSyncing = false;
   }
-  isSyncing = false;
 }
 
 async function _fetchFromGist(pat, gistId) {
@@ -1007,12 +1020,15 @@ async function sbLoad(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [cloudStocks, cloudLog] = await Promise.all([
+    const [stocksRow, logRow] = await Promise.all([
       _sbGet('sp_stocks'),
       _sbGet('sp_portfolio_log'),
     ]);
-    const localStocks = JSON.parse(localStorage.getItem('stocks') || '[]');
-    const localLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
+    const cloudStocks    = stocksRow?.value ?? null;
+    const cloudLog       = logRow?.value   ?? null;
+    const cloudUpdatedAt = stocksRow?.updated_at ?? null;
+    const localStocks    = JSON.parse(localStorage.getItem('stocks') || '[]');
+    const localLog       = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 
     // 旧Gist設定が残っていればGistからデータを取得してSupabaseへ移行
     let gistData = null;
@@ -1024,7 +1040,12 @@ async function sbLoad(silent = false) {
       }
     } catch(e) {}
 
-    // データの優先順: Gist移行データ > クラウド(件数多) > ローカル(件数多)
+    // クラウドが最新かどうか: タイムスタンプ優先、なければ件数比較
+    const cloudIsNewer = cloudUpdatedAt && lastCloudUpdatedAt
+      ? cloudUpdatedAt > lastCloudUpdatedAt
+      : cloudStocks && cloudStocks.length >= localStocks.length;
+
+    // データの優先順: Gist移行データ > クラウド(新しい/件数多) > ローカル
     if (gistData && gistData.stocks.length > (cloudStocks?.length || 0)) {
       stocks       = gistData.stocks.map(migrateStock);
       portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(gistData.log));
@@ -1035,12 +1056,13 @@ async function sbLoad(silent = false) {
       render();
       renderPieChart();
       renderLineChart();
-      await sbSave(true);
+      await _doSave();
       if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
-    } else if (cloudStocks && cloudStocks.length >= localStocks.length) {
+    } else if (cloudStocks && cloudIsNewer) {
       stocks       = cloudStocks.map(migrateStock);
       portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
       recordDailyLog();
+      lastCloudUpdatedAt = cloudUpdatedAt;
       localStorage.setItem('stocks', JSON.stringify(stocks));
       localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
       document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
@@ -1049,8 +1071,8 @@ async function sbLoad(silent = false) {
       renderLineChart();
       if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
     } else {
-      // ローカルの方が多い（または初回）→ ローカルをクラウドへ移行
-      await sbSave(true);
+      // ローカルの方が新しい（または初回）→ ローカルをクラウドへ移行
+      await _doSave();
       if (!silent) toast('ローカルデータをクラウドに移行しました', 'success');
     }
     updateSyncIcon('ok');
@@ -1058,8 +1080,23 @@ async function sbLoad(silent = false) {
     updateSyncIcon('error');
     if (!silent) toast('クラウド読込失敗', 'error');
     console.error('sbLoad error:', e);
+  } finally {
+    isSyncing = false;
   }
-  isSyncing = false;
+}
+
+// 他デバイスの変更を検知するポーリング（5分ごと）
+async function pollCloudChanges() {
+  if (isSyncing) return;
+  try {
+    const updatedAt = await _sbGetUpdatedAt('sp_stocks');
+    if (updatedAt && updatedAt !== lastCloudUpdatedAt) {
+      // クラウドが更新されている → サイレントで取得
+      await sbLoad(true);
+    }
+  } catch(e) {
+    // ポーリング失敗は無視
+  }
 }
 
 // ── (削除済みのGist関連コード用スタブ) ─────────────────────────────
@@ -1167,6 +1204,16 @@ setInterval(() => {
 // 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
 updateSyncIcon('syncing');
 setTimeout(() => sbLoad(true), 800);
+
+// Supabase Realtimeで他デバイスの変更を即時検知
+_sb.channel('portfolio_sync')
+  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'key=eq.sp_stocks' }, () => {
+    sbLoad(true);
+  })
+  .subscribe();
+
+// Realtime未対応環境のフォールバック: 30秒ごとにポーリング
+setInterval(pollCloudChanges, 30 * 1000);
 
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
 const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
