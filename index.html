@@ -1240,6 +1240,15 @@ _sb.channel('portfolio_sync')
 // Realtime未対応環境のフォールバック: 30秒ごとにポーリング
 setInterval(pollCloudChanges, 30 * 1000);
 
+// ?upload=1 パラメータで強制アップロード（データ復元用）
+if (new URLSearchParams(location.search).get('upload') === '1') {
+  setTimeout(async () => {
+    localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
+    await sbSave(false);
+    history.replaceState({}, '', location.pathname);
+  }, 1200);
+}
+
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
 const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
 const PRICE_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
