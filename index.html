@@ -406,7 +406,7 @@
           <th onclick="sortBy('quantity')">保有数 <span id="sort-quantity">↕</span></th>
           <th onclick="sortBy('avgPrice')">取得価格 <span id="sort-avgPrice">↕</span></th>
           <th onclick="sortBy('currentPrice')">現在価格 <span id="sort-currentPrice">↕</span></th>
-          <th onclick="sortBy('value')">評価額 <span id="sort-value">↕</span></th>
+          <th onclick="sortBy('value')">評価額(円) <span id="sort-value">↕</span></th>
           <th onclick="sortBy('dayPL')">本日損益 <span id="sort-dayPL">↕</span></th>
           <th onclick="sortBy('pl')">含み損益 <span id="sort-pl">↕</span></th>
           <th onclick="sortBy('plPct')">損益率 <span id="sort-plPct">↕</span></th>
@@ -1810,7 +1810,7 @@ function render() {
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
       <td>${fmtPrice(s.avgPrice, avgCur)}</td>
       <td>${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}${navDateHtml}</td>
-      <td>${fmtPrice(value, s.currency)}</td>
+      <td>${fmtJPY(toJPY(value, s.currency))}</td>
       <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
       <td class="${plClass(plJPY)}">${useJPYpl ? ((plJPY>=0?'+':'-')+fmtJPY(Math.abs(plJPY))) : fmtPL(pl, s.currency)}</td>
       <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
