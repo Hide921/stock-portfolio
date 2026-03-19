@@ -261,7 +261,7 @@
     <span id="apiLabel">確認中...</span>
   </div>
   <span class="last-updated" id="lastUpdated"></span>
-  <button class="btn-sync" id="syncBtn" onclick="sbSave(false)" title="クラウドへ保存">
+  <button class="btn-sync" id="syncBtn" onclick="smartSync()" title="クラウドと同期">
     <span id="syncIcon">☁️</span>
     <span id="syncStatusText">接続中...</span>
   </button>
@@ -1082,6 +1082,28 @@ async function sbLoad(silent = false) {
     console.error('sbLoad error:', e);
   } finally {
     isSyncing = false;
+  }
+}
+
+// ☁️ボタン: クラウドとローカルを比較して新しい方を優先
+async function smartSync() {
+  if (isSyncing) return;
+  updateSyncIcon('syncing');
+  try {
+    const row = await _sbGet('sp_stocks');
+    const cloudCount = row?.value?.length ?? 0;
+    const cloudUpdatedAt = row?.updated_at ?? null;
+    const isCloudNewer = cloudUpdatedAt && lastCloudUpdatedAt
+      ? cloudUpdatedAt > lastCloudUpdatedAt
+      : cloudCount > stocks.length;
+    if (isCloudNewer) {
+      await sbLoad(false); // クラウドが新しい → ダウンロード
+    } else {
+      await sbSave(false); // ローカルが新しい → アップロード
+    }
+  } catch(e) {
+    updateSyncIcon('error');
+    toast('同期失敗', 'error');
   }
 }
 
