@@ -1282,6 +1282,21 @@ renderPieChart();
 checkAPI();
 fetchHistory(currentPeriod);
 
+// 1分ごとに価格を自動更新
+const AUTO_REFRESH_INTERVAL = 60; // 秒
+let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+setInterval(fetchAllPrices, AUTO_REFRESH_INTERVAL * 1000);
+setInterval(() => {
+  autoRefreshCountdown--;
+  if (autoRefreshCountdown <= 0) autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+  const el = document.getElementById('lastUpdated');
+  if (el) {
+    const base = el.dataset.base || el.textContent;
+    el.dataset.base = base.replace(/ \(次回更新: \d+秒後\)$/, '');
+    el.textContent = el.dataset.base + ` (次回更新: ${autoRefreshCountdown}秒後)`;
+  }
+}, 1000);
+
 // Render バックエンドをスリープさせないよう10分ごとにping
 if (API_BASE) {
   setInterval(() => {
@@ -1553,6 +1568,7 @@ async function fetchAllPrices() {
     isFetching = false;
     btn.innerHTML = '📡 価格を自動取得';
     btn.disabled  = false;
+    autoRefreshCountdown = AUTO_REFRESH_INTERVAL; // カウントダウンリセット
   }
 }
 
