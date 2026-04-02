@@ -1861,8 +1861,22 @@ function render() {
   const marginPLPct = marginCostJPY ? marginPL / marginCostJPY * 100 : 0;
   const hasMargin   = stocks.some(s => s.tradeType === 'margin');
 
-  document.getElementById('totalValue').textContent  = fmtJPY(totalValueJPY);
-  document.getElementById('totalCost').textContent   = '取得総額: ' + fmtJPY(totalCostJPY);
+  // 担保金カード（totalValue より先に計算）
+  const collateralSum = collateralEntries.reduce((s, e) => s + toJPY(Number(e.amount) || 0, e.currency || 'JPY'), 0);
+  const hasCollateral = collateralEntries.length > 0;
+  document.getElementById('collateralCard').style.display = hasCollateral ? '' : 'none';
+  if (hasCollateral) {
+    document.getElementById('collateralTotal').textContent = fmtJPY(collateralSum);
+    document.getElementById('collateralSub').textContent   = `${collateralEntries.length}件`;
+  }
+  document.getElementById('collateralHeaderSum').textContent = '合計: ' + fmtJPY(collateralSum);
+
+  // 総資産カード（株式＋担保金）
+  const grandTotal = totalValueJPY + collateralSum;
+  document.getElementById('totalValue').textContent = fmtJPY(grandTotal);
+  document.getElementById('totalCost').textContent  = hasCollateral
+    ? `株式: ${fmtJPY(totalValueJPY)} | 担保金: ${fmtJPY(collateralSum)}`
+    : `取得総額: ${fmtJPY(totalCostJPY)}`;
   const plEl = document.getElementById('totalPL');
   plEl.textContent = (totalPL >= 0 ? '+' : '-') + fmtJPY(totalPL);
   plEl.className   = 'card-value ' + plClass(totalPL);
@@ -1876,16 +1890,6 @@ function render() {
   dayEl.textContent = (allDayPLJPY >= 0 ? '+' : '-') + fmtJPY(allDayPLJPY);
   dayEl.className   = 'card-value ' + plClass(allDayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
-
-  // 担保金カード
-  const collateralSum = collateralEntries.reduce((s, e) => s + toJPY(Number(e.amount) || 0, e.currency || 'JPY'), 0);
-  const hasCollateral = collateralEntries.length > 0;
-  document.getElementById('collateralCard').style.display = hasCollateral ? '' : 'none';
-  if (hasCollateral) {
-    document.getElementById('collateralTotal').textContent = fmtJPY(collateralSum);
-    document.getElementById('collateralSub').textContent   = `${collateralEntries.length}件`;
-  }
-  document.getElementById('collateralHeaderSum').textContent = '合計: ' + fmtJPY(collateralSum);
 
   // 信用損益カード
   document.getElementById('marginCard').style.display = hasMargin ? '' : 'none';
