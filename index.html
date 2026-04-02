@@ -404,7 +404,7 @@
         <thead>
           <tr>
             <th>口座名</th>
-            <th>預入金額 (円)</th>
+            <th>預入金額</th>
             <th>メモ</th>
             <th>操作</th>
           </tr>
@@ -609,9 +609,16 @@
         <label>口座名 *</label>
         <input type="text" id="cName" placeholder="例: SBI証券 信用口座">
       </div>
-      <div class="form-group full">
-        <label>預入金額 (円) *</label>
-        <input type="number" id="cAmount" placeholder="1000000" min="0" step="1">
+      <div class="form-group">
+        <label>通貨</label>
+        <select id="cCurrency">
+          <option value="JPY">円 (JPY)</option>
+          <option value="USD">ドル (USD)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>預入金額 *</label>
+        <input type="number" id="cAmount" placeholder="1000000" min="0" step="0.01">
       </div>
       <div class="form-group full">
         <label>メモ</label>
@@ -1871,7 +1878,7 @@ function render() {
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
 
   // 担保金カード
-  const collateralSum = collateralEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const collateralSum = collateralEntries.reduce((s, e) => s + toJPY(Number(e.amount) || 0, e.currency || 'JPY'), 0);
   const hasCollateral = collateralEntries.length > 0;
   document.getElementById('collateralCard').style.display = hasCollateral ? '' : 'none';
   if (hasCollateral) {
@@ -2539,16 +2546,25 @@ function renderCollateral() {
     render();
     return;
   }
-  tbody.innerHTML = collateralEntries.map(e => `
+  tbody.innerHTML = collateralEntries.map(e => {
+    const cur     = e.currency || 'JPY';
+    const amtText = cur === 'USD'
+      ? `$${Number(e.amount).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})} <span style="font-size:11px;color:var(--text-muted)">(≒${fmtJPY(toJPY(e.amount, 'USD'))})</span>`
+      : fmtJPY(e.amount);
+    const badge = cur === 'USD'
+      ? `<span class="badge badge-us" style="margin-left:6px">USD</span>`
+      : `<span class="badge badge-jp" style="margin-left:6px">JPY</span>`;
+    return `
     <tr>
-      <td style="font-weight:600">${esc(e.name)}</td>
-      <td style="font-weight:700;color:var(--text)">${fmtJPY(e.amount)}</td>
+      <td style="font-weight:600">${esc(e.name)}${badge}</td>
+      <td style="font-weight:700;color:var(--text)">${amtText}</td>
       <td style="color:var(--text-muted);font-size:12px">${esc(e.note || '—')}</td>
       <td><div class="actions">
         <button class="btn-edit" onclick="openCollateralModal('${e.id}')">編集</button>
         <button class="btn-danger" onclick="deleteCollateral('${e.id}')">削除</button>
       </div></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   render();
 }
 
@@ -2556,9 +2572,10 @@ function openCollateralModal(id = null) {
   collateralEditId = id;
   const entry = id ? collateralEntries.find(e => e.id === id) : null;
   document.getElementById('collateralModalTitle').textContent = id ? '担保金を編集' : '担保金を追加';
-  document.getElementById('cName').value   = entry?.name   || '';
-  document.getElementById('cAmount').value = entry?.amount || '';
-  document.getElementById('cNote').value   = entry?.note   || '';
+  document.getElementById('cName').value     = entry?.name     || '';
+  document.getElementById('cCurrency').value = entry?.currency || 'JPY';
+  document.getElementById('cAmount').value   = entry?.amount   || '';
+  document.getElementById('cNote').value     = entry?.note     || '';
   document.getElementById('collateralOverlay').classList.add('open');
   setTimeout(() => document.getElementById('cName').focus(), 50);
 }
@@ -2570,17 +2587,18 @@ function closeCollateralModal(e) {
 }
 
 function saveCollateralEntry() {
-  const name   = document.getElementById('cName').value.trim();
-  const amount = parseFloat(document.getElementById('cAmount').value);
-  const note   = document.getElementById('cNote').value.trim();
+  const name     = document.getElementById('cName').value.trim();
+  const currency = document.getElementById('cCurrency').value;
+  const amount   = parseFloat(document.getElementById('cAmount').value);
+  const note     = document.getElementById('cNote').value.trim();
   if (!name)            { toast('口座名を入力してください', 'error'); return; }
   if (isNaN(amount) || amount < 0) { toast('金額を正しく入力してください', 'error'); return; }
 
   if (collateralEditId) {
     const idx = collateralEntries.findIndex(e => e.id === collateralEditId);
-    if (idx >= 0) collateralEntries[idx] = { ...collateralEntries[idx], name, amount, note };
+    if (idx >= 0) collateralEntries[idx] = { ...collateralEntries[idx], name, currency, amount, note };
   } else {
-    collateralEntries.push({ id: uid(), name, amount, note });
+    collateralEntries.push({ id: uid(), name, currency, amount, note });
   }
   // 開いていなければ自動で展開
   if (!collateralOpen) toggleCollateral();
