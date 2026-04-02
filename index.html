@@ -186,6 +186,19 @@
     .rb-alert td:nth-child(6) { font-size: 14px; font-weight: 700; }
     .rb-alert-badge { display: inline-block; font-size: 10px; background: rgba(245,158,11,0.2); color: var(--yellow); border: 1px solid rgba(245,158,11,0.4); border-radius: 4px; padding: 1px 5px; margin-left: 5px; vertical-align: middle; }
 
+    /* ── Collateral Section ── */
+    .collateral-section { margin-bottom: 16px; }
+    .collateral-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; user-select: none; transition: border-color 0.15s; }
+    .collateral-header.open { border-radius: 12px 12px 0 0; }
+    .collateral-header:hover { border-color: var(--accent); }
+    .collateral-body { background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 12px 12px; display: none; }
+    .collateral-body.open { display: block; }
+    .collateral-table { width: 100%; border-collapse: collapse; }
+    .collateral-table th { background: var(--surface2); padding: 9px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; text-align: left; }
+    .collateral-table td { padding: 12px 14px; border-top: 1px solid var(--border); }
+    .collateral-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .collateral-empty { text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px; }
+
     /* ── Toast ── */
     .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 11px 16px; font-size: 13px; z-index: 200; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; max-width: 320px; }
     .toast.show { transform: translateY(0); opacity: 1; }
@@ -331,6 +344,11 @@
       <div class="card-value neutral" id="marginPL">¥0</div>
       <div class="card-sub" id="marginPLSub">-</div>
     </div>
+    <div class="card" id="collateralCard" style="display:none">
+      <div class="card-label">担保金合計 (証拠金)</div>
+      <div class="card-value" id="collateralTotal">¥0</div>
+      <div class="card-sub" id="collateralSub">0件</div>
+    </div>
   </div>
 
   <!-- Charts -->
@@ -368,6 +386,31 @@
           <span>「価格を自動取得」のたびに<br>終値を記録してグラフを蓄積します</span>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- 担保金管理 -->
+  <div class="collateral-section">
+    <div class="collateral-header" id="collateralHeader" onclick="toggleCollateral()">
+      <span style="font-weight:600;font-size:13px">🏦 担保金管理（証拠金）</span>
+      <div style="display:flex;align-items:center;gap:12px" onclick="event.stopPropagation()">
+        <span style="font-size:12px;color:var(--text-muted)" id="collateralHeaderSum">合計: ¥0</span>
+        <button class="btn-primary" style="padding:4px 12px;font-size:12px" onclick="openCollateralModal()">+ 追加</button>
+        <span id="collateralToggleIcon" style="color:var(--text-muted);font-size:12px;pointer-events:none">▶</span>
+      </div>
+    </div>
+    <div class="collateral-body" id="collateralBody">
+      <table class="collateral-table">
+        <thead>
+          <tr>
+            <th>口座名</th>
+            <th>預入金額 (円)</th>
+            <th>メモ</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="collateralTbody"></tbody>
+      </table>
     </div>
   </div>
 
@@ -553,6 +596,31 @@
       <button class="btn-ghost" onclick="closeRebalanceModal()">閉じる</button>
       <button class="btn-ghost" onclick="distributeEvenRebalance()">均等配分</button>
       <button class="btn-primary" onclick="saveRebalanceTargets()">目標を保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 担保金モーダル -->
+<div class="overlay" id="collateralOverlay" onclick="closeCollateralModal(event)">
+  <div class="modal">
+    <h2 id="collateralModalTitle">担保金を追加</h2>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>口座名 *</label>
+        <input type="text" id="cName" placeholder="例: SBI証券 信用口座">
+      </div>
+      <div class="form-group full">
+        <label>預入金額 (円) *</label>
+        <input type="number" id="cAmount" placeholder="1000000" min="0" step="1">
+      </div>
+      <div class="form-group full">
+        <label>メモ</label>
+        <input type="text" id="cNote" placeholder="自由記述">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeCollateralModal()">キャンセル</button>
+      <button class="btn-primary" onclick="saveCollateralEntry()">保存</button>
     </div>
   </div>
 </div>
@@ -879,6 +947,11 @@ let lineChart        = null;
 let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
 const PORTFOLIO_LOG_KEY = 'portfolio_log_v1';
 
+let collateralEntries = [];  // 担保金一覧 [{id, name, amount, note}, ...]
+const COLLATERAL_KEY  = 'collateral_v1';
+let collateralEditId  = null;
+let collateralOpen    = false;
+
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -1042,6 +1115,7 @@ async function _doSave() {
   const [stocksTs] = await Promise.all([
     _sbSet('sp_stocks', stocks),
     _sbSet('sp_portfolio_log', portfolioLog),
+    _sbSet('sp_collateral', collateralEntries),
   ]);
   // サーバー側の実際のタイムスタンプを使う（ローカル時刻とのズレを防ぐ）
   const savedAt = stocksTs || new Date().toISOString();
@@ -1084,15 +1158,17 @@ async function sbLoad(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [stocksRow, logRow] = await Promise.all([
+    const [stocksRow, logRow, collateralRow] = await Promise.all([
       _sbGet('sp_stocks'),
       _sbGet('sp_portfolio_log'),
+      _sbGet('sp_collateral'),
     ]);
-    const cloudStocks    = stocksRow?.value ?? null;
-    const cloudLog       = logRow?.value   ?? null;
-    const cloudUpdatedAt = stocksRow?.updated_at ?? null;
-    const localStocks    = JSON.parse(localStorage.getItem('stocks') || '[]');
-    const localLog       = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
+    const cloudStocks     = stocksRow?.value      ?? null;
+    const cloudLog        = logRow?.value          ?? null;
+    const cloudCollateral = collateralRow?.value   ?? null;
+    const cloudUpdatedAt  = stocksRow?.updated_at  ?? null;
+    const localStocks     = JSON.parse(localStorage.getItem('stocks') || '[]');
+    const localLog        = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 
     // 旧Gist設定が残っていればGistからデータを取得してSupabaseへ移行
     let gistData = null;
@@ -1125,8 +1201,9 @@ async function sbLoad(silent = false) {
       localStorage.setItem(LOCAL_UPDATED_AT_KEY, lastCloudUpdatedAt || new Date().toISOString());
       if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
     } else if (cloudStocks && cloudIsNewer) {
-      stocks       = cloudStocks.map(migrateStock);
-      portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
+      stocks            = cloudStocks.map(migrateStock);
+      portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
+      if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
       recordDailyLog();
       lastCloudUpdatedAt = cloudUpdatedAt;
       localStorage.setItem('stocks', JSON.stringify(stocks));
@@ -1275,6 +1352,8 @@ const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
+renderCollateral();
 
 render();
 renderPieChart();
@@ -1368,6 +1447,7 @@ function save(skipSync = false) {
   const now = new Date().toISOString();
   localStorage.setItem('stocks', JSON.stringify(stocks));
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+  localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries));
   localStorage.setItem(LOCAL_UPDATED_AT_KEY, now);
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
@@ -1789,6 +1869,16 @@ function render() {
   dayEl.textContent = (allDayPLJPY >= 0 ? '+' : '-') + fmtJPY(allDayPLJPY);
   dayEl.className   = 'card-value ' + plClass(allDayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
+
+  // 担保金カード
+  const collateralSum = collateralEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const hasCollateral = collateralEntries.length > 0;
+  document.getElementById('collateralCard').style.display = hasCollateral ? '' : 'none';
+  if (hasCollateral) {
+    document.getElementById('collateralTotal').textContent = fmtJPY(collateralSum);
+    document.getElementById('collateralSub').textContent   = `${collateralEntries.length}件`;
+  }
+  document.getElementById('collateralHeaderSum').textContent = '合計: ' + fmtJPY(collateralSum);
 
   // 信用損益カード
   document.getElementById('marginCard').style.display = hasMargin ? '' : 'none';
@@ -2432,6 +2522,81 @@ function saveRebalanceTargets() {
   } catch(e) {
     toast('保存に失敗しました', 'error');
   }
+}
+
+// ── 担保金管理 ────────────────────────────────────────────────────
+function toggleCollateral() {
+  collateralOpen = !collateralOpen;
+  document.getElementById('collateralBody').classList.toggle('open', collateralOpen);
+  document.getElementById('collateralHeader').classList.toggle('open', collateralOpen);
+  document.getElementById('collateralToggleIcon').textContent = collateralOpen ? '▼' : '▶';
+}
+
+function renderCollateral() {
+  const tbody = document.getElementById('collateralTbody');
+  if (!collateralEntries.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="collateral-empty">担保金が登録されていません。「+ 追加」から登録してください。</td></tr>`;
+    render();
+    return;
+  }
+  tbody.innerHTML = collateralEntries.map(e => `
+    <tr>
+      <td style="font-weight:600">${esc(e.name)}</td>
+      <td style="font-weight:700;color:var(--text)">${fmtJPY(e.amount)}</td>
+      <td style="color:var(--text-muted);font-size:12px">${esc(e.note || '—')}</td>
+      <td><div class="actions">
+        <button class="btn-edit" onclick="openCollateralModal('${e.id}')">編集</button>
+        <button class="btn-danger" onclick="deleteCollateral('${e.id}')">削除</button>
+      </div></td>
+    </tr>`).join('');
+  render();
+}
+
+function openCollateralModal(id = null) {
+  collateralEditId = id;
+  const entry = id ? collateralEntries.find(e => e.id === id) : null;
+  document.getElementById('collateralModalTitle').textContent = id ? '担保金を編集' : '担保金を追加';
+  document.getElementById('cName').value   = entry?.name   || '';
+  document.getElementById('cAmount').value = entry?.amount || '';
+  document.getElementById('cNote').value   = entry?.note   || '';
+  document.getElementById('collateralOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('cName').focus(), 50);
+}
+
+function closeCollateralModal(e) {
+  if (e && e.target !== document.getElementById('collateralOverlay')) return;
+  document.getElementById('collateralOverlay').classList.remove('open');
+  collateralEditId = null;
+}
+
+function saveCollateralEntry() {
+  const name   = document.getElementById('cName').value.trim();
+  const amount = parseFloat(document.getElementById('cAmount').value);
+  const note   = document.getElementById('cNote').value.trim();
+  if (!name)            { toast('口座名を入力してください', 'error'); return; }
+  if (isNaN(amount) || amount < 0) { toast('金額を正しく入力してください', 'error'); return; }
+
+  if (collateralEditId) {
+    const idx = collateralEntries.findIndex(e => e.id === collateralEditId);
+    if (idx >= 0) collateralEntries[idx] = { ...collateralEntries[idx], name, amount, note };
+  } else {
+    collateralEntries.push({ id: uid(), name, amount, note });
+  }
+  // 開いていなければ自動で展開
+  if (!collateralOpen) toggleCollateral();
+  document.getElementById('collateralOverlay').classList.remove('open');
+  collateralEditId = null;
+  renderCollateral();
+  save();
+  toast('担保金を保存しました', 'success');
+}
+
+function deleteCollateral(id) {
+  if (!confirm('この担保金を削除しますか？')) return;
+  collateralEntries = collateralEntries.filter(e => e.id !== id);
+  renderCollateral();
+  save();
+  toast('担保金を削除しました', 'success');
 }
 
 // ── トースト ──────────────────────────────────────────────────────
