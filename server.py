@@ -1159,7 +1159,7 @@ def get_name():
         if is_fund_ticker(ticker):
             fund_code = ticker[:-2]
             url = f'https://finance.yahoo.co.jp/quote/{fund_code}'
-            r = req.get(url, headers=_YF_JP_HEADERS, timeout=10)
+            r = _yfjp_get(url, timeout=10)
             r.raise_for_status()
             # <title> からファンド名を抽出
             m = re.search(r'<title>\s*(.+?)(?:【|\[|\|)', r.text)
@@ -1167,8 +1167,12 @@ def get_name():
             logging.info(f'NAME FUND {fund_code}: {name!r}')
             return jsonify({'name': name})
         else:
-            info = yf_ticker(ticker).info
-            name = info.get('shortName') or info.get('longName') or ''
+            import urllib.parse as _up
+            url = f'https://query2.finance.yahoo.com/v8/finance/chart/{_up.quote(ticker)}?interval=1d&range=5d'
+            r = _yfus_get(url, timeout=10)
+            r.raise_for_status()
+            meta = r.json().get('chart', {}).get('result', [{}])[0].get('meta', {})
+            name = meta.get('shortName') or meta.get('longName') or ''
             logging.info(f'NAME {ticker}: {name!r}')
             return jsonify({'name': name})
     except Exception as e:
