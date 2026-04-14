@@ -2026,7 +2026,9 @@ function onTickerInput() {
   }
   const market = marketEl.value;
   clearTimeout(_nameFetchTimer);
-  if (raw.length >= 4) {
+  // 市場別の最低文字数: US/CRYPTO は1文字〜、JP は4桁、FUND は8桁
+  const minLen = (market === 'US' || market === 'CRYPTO') ? 1 : market === 'FUND' ? 8 : 4;
+  if (raw.length >= minLen) {
     _nameFetchTimer = setTimeout(() => autoFetchName(raw, market), 600);
   }
 }
