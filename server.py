@@ -14,12 +14,20 @@ import time
 import requests as req
 from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
-import yfinance as yf
+try:
+    import yfinance as yf
+    _YFINANCE_AVAILABLE = True
+except ImportError:
+    yf = None  # type: ignore
+    _YFINANCE_AVAILABLE = False
+    logging.warning('yfinance not available — falling back to Chart API only')
 
 
-def yf_ticker(ticker: str) -> yf.Ticker:
+def yf_ticker(ticker: str):
     """yfinance 0.2.x は curl_cffi セッションを内部管理するため
     session パラメータは渡さず、ライブラリに任せる。"""
+    if not _YFINANCE_AVAILABLE:
+        raise ImportError('yfinance is not installed')
     return yf.Ticker(ticker)
 
 
@@ -203,6 +211,54 @@ def _yfjp_get(url: str, timeout: int = 15):
         raise
 
 
+# ── Yahoo Finance US curl_cffi Session ───────────────────────────────
+# query1/query2.finance.yahoo.com も Cookie + TLS 偽装が必要になった。
+_cffi_us_session = None
+_cffi_us_session_ts: float = 0.0
+_CFFI_US_SESSION_TTL = 1800
+
+
+def _get_cffi_us_session():
+    """Yahoo Finance US 用 curl_cffi Session。未初期化または期限切れなら再構築。"""
+    global _cffi_us_session, _cffi_us_session_ts
+    if _cffi_us_session is not None and time.time() - _cffi_us_session_ts < _CFFI_US_SESSION_TTL:
+        return _cffi_us_session
+    try:
+        from curl_cffi import requests as cffi_req  # type: ignore
+        s = cffi_req.Session(impersonate='chrome124')
+        s.headers.update({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'application/json,text/html,*/*;q=0.8',
+        })
+        try:
+            s.get('https://finance.yahoo.com/', timeout=10)
+            logging.info('YFUS cffi session initialized (cookie acquired)')
+        except Exception as e:
+            logging.warning(f'YFUS cffi home page failed: {e}')
+        _cffi_us_session = s
+        _cffi_us_session_ts = time.time()
+        return s
+    except ImportError:
+        return None
+
+
+def _yfus_get(url: str, timeout: int = 15):
+    """Yahoo Finance US Chart API への GET。curl_cffi で Cookie + TLS 偽装。"""
+    s = _get_cffi_us_session()
+    if s is not None:
+        try:
+            resp = s.get(url, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
+            logging.info(f'YFUS cffi: status={resp.status_code} url={url}')
+            return resp
+        except Exception as e:
+            logging.warning(f'YFUS cffi request failed ({type(e).__name__}): {e}  url={url}')
+            global _cffi_us_session, _cffi_us_session_ts
+            _cffi_us_session = None
+            _cffi_us_session_ts = 0.0
+    # フォールバック: 通常 requests
+    return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
+
+
 # ── requests セッション（curl_cffi 不使用時のフォールバック）────
 _yfjp_session: req.Session | None = None
 _yfjp_session_ts: float = 0.0
@@ -271,7 +327,7 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     """Yahoo Finance Chart API を直接叩いて現在価格を取得（yfinance 非依存）"""
     import urllib.parse
     url = f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=5d'
-    r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
+    r = _yfus_get(url, timeout=15)
     r.raise_for_status()
     data = r.json()
     result = data['chart']['result'][0]
@@ -465,7 +521,7 @@ def _fetch_fund_price_via_quote_api(ticker: str) -> dict:
     for host in ('query1', 'query2'):
         try:
             url = f'https://{host}.finance.yahoo.com/v7/finance/quote?symbols={_up.quote(ticker)}'
-            r = req.get(url, headers=_YF_API_HEADERS, timeout=12)
+            r = _yfus_get(url, timeout=12)
             r.raise_for_status()
             result = r.json().get('quoteResponse', {}).get('result', [])
             if not result:
@@ -701,9 +757,9 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
         _period_map = {'5d': '5d', '1mo': '1mo', '3mo': '3mo', '6mo': '6mo',
                        '1y': '1y', '2y': '2y', '5y': '5y'}
         yf_period = _period_map.get(period, '1mo')
-        r = req.get(
+        r = _yfus_get(
             f'https://query2.finance.yahoo.com/v8/finance/chart/{t}?interval=1d&range={yf_period}',
-            headers=_YF_API_HEADERS, timeout=15
+            timeout=15
         )
         r.raise_for_status()
         data = r.json()
@@ -953,12 +1009,12 @@ def proxy():
     if not _is_allowed_proxy_url(url):
         return jsonify({'error': 'forbidden'}), 403
     try:
-        # Yahoo Finance Japan HTML は curl_cffi で TLS 偽装リクエスト
+        # Yahoo Finance Japan / US ともに curl_cffi で TLS 偽装リクエスト
         parsed = urlparse(url)
         if (parsed.hostname or '').endswith('finance.yahoo.co.jp'):
             r = _yfjp_get(url, timeout=15)
         else:
-            r = req.get(url, headers=_YF_API_HEADERS, timeout=15)
+            r = _yfus_get(url, timeout=15)
         content_type = r.headers.get('Content-Type', 'application/json')
         return Response(r.content, status=r.status_code, content_type=content_type)
     except Exception as e:
