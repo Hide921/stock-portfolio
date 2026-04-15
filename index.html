@@ -1367,6 +1367,8 @@ renderPieChart();
 // 価格取得とグラフ履歴取得を並列で開始（グラフを待たせない）
 checkAPI();
 fetchHistory(currentPeriod);
+// Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
+if (API_BASE) { fetch(API_BASE + '/api/health', { signal: AbortSignal.timeout(40000) }).catch(() => {}); }
 
 // 1分ごとに価格を自動更新
 const AUTO_REFRESH_INTERVAL = 60; // 秒
@@ -2052,9 +2054,18 @@ async function autoFetchName(ticker, market) {
         if (res.ok) { const d = await res.json(); name = d.name || ''; }
       }
     } else {
-      // 株式: Yahoo Finance US を yhFetch で直接取得 (高速)
-      const r = await yhFetch(yahooTicker, '?interval=1d&range=5d');
-      name = r.meta.shortName || r.meta.longName || '';
+      // 株式: Render /api/name エンドポイントで取得（curl_cffi TLS偽装で安定）
+      // Render がスリープ中でも最大35秒待機して起動を待つ
+      if (API_BASE) {
+        const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+          signal: AbortSignal.timeout(35000),
+        });
+        if (res.ok) { const d = await res.json(); name = d.name || ''; }
+      } else {
+        // ローカル環境: Yahoo Finance Chart API 経由（プロキシ不要）
+        const r = await yhFetch(yahooTicker, '?interval=1d&range=5d');
+        name = r.meta.shortName || r.meta.longName || '';
+      }
     }
     if (name && !nameEl.value) nameEl.value = name;
   } catch(e) {
