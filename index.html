@@ -1368,7 +1368,7 @@ renderPieChart();
 checkAPI();
 fetchHistory(currentPeriod);
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
-if (API_BASE) { fetch(API_BASE + '/api/health', { signal: AbortSignal.timeout(40000) }).catch(() => {}); }
+wakeRender();
 
 // 1分ごとに価格を自動更新
 const AUTO_REFRESH_INTERVAL = 60; // 秒
@@ -1969,6 +1969,7 @@ document.getElementById('tradeFilter').addEventListener('change',  e => { filter
 // ── モーダル ──────────────────────────────────────────────────────
 function openModal(id = null) {
   editId = id;
+  wakeRender(); // モーダルを開いたタイミングで Render を起動開始
   const s = id ? stocks.find(x => x.id === id) : null;
   document.getElementById('modalTitle').textContent = id ? '銘柄を編集' : '銘柄を追加';
   document.getElementById('fMarket').value     = s?.market     || 'JP';
@@ -2017,6 +2018,19 @@ function onAvgCurChange() {
   document.getElementById('avgLabel').textContent = `平均取得価格 (${avgCur==='USD'?'$':'¥'}) *`;
 }
 
+// ── Render ウォームアップ（スリープ対策）───────────────────────
+// 複数の autoFetchName が同時に呼ばれても Render へのリクエストは1本に絞る
+let _renderWakePromise = null;
+function wakeRender() {
+  if (!API_BASE) return Promise.resolve();
+  if (_renderWakePromise) return _renderWakePromise;
+  _renderWakePromise = fetch(API_BASE + '/api/health', {
+    signal: AbortSignal.timeout(65000),
+    cache: 'no-store',
+  }).catch(() => { _renderWakePromise = null; }); // 失敗したら次回リトライ可能にする
+  return _renderWakePromise;
+}
+
 let _nameFetchTimer = null;
 function onTickerInput() {
   const raw      = document.getElementById('fTicker').value.trim().toUpperCase();
@@ -2054,11 +2068,12 @@ async function autoFetchName(ticker, market) {
         if (res.ok) { const d = await res.json(); name = d.name || ''; }
       }
     } else {
-      // 株式: Render /api/name エンドポイントで取得（curl_cffi TLS偽装で安定）
-      // Render がスリープ中でも最大35秒待機して起動を待つ
       if (API_BASE) {
+        // Render が起動するまで待機（Free プランは最大60秒かかる場合あり）
+        // 「取得中…」がそのまま表示され続けるので UX 的に問題ない
+        await wakeRender();
         const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
-          signal: AbortSignal.timeout(35000),
+          signal: AbortSignal.timeout(10000),
         });
         if (res.ok) { const d = await res.json(); name = d.name || ''; }
       } else {
