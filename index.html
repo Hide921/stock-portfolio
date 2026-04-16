@@ -1223,19 +1223,26 @@ async function sbLoad(silent = false) {
       localStorage.setItem(LOCAL_UPDATED_AT_KEY, lastCloudUpdatedAt || new Date().toISOString());
       if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
     } else if (cloudStocks && cloudIsNewer) {
-      stocks            = cloudStocks.map(migrateStock);
-      portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
-      if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
-      recordDailyLog();
-      lastCloudUpdatedAt = cloudUpdatedAt;
-      localStorage.setItem('stocks', JSON.stringify(stocks));
-      localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
-      localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
-      document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
-      render();
-      renderPieChart();
-      renderLineChart();
-      if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
+      // 安全策: クラウドの件数がローカルより大幅に少ない場合は上書きしない
+      if (localStocks.length > 0 && cloudStocks.length < localStocks.length * 0.5) {
+        console.warn(`sbLoad: クラウド(${cloudStocks.length}件)がローカル(${localStocks.length}件)より大幅に少ないため上書きをスキップ。ローカルをアップロードします。`);
+        await _doSave();
+        if (!silent) toast(`ローカル(${localStocks.length}件)を保持しました`, 'success');
+      } else {
+        stocks            = cloudStocks.map(migrateStock);
+        portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
+        if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
+        recordDailyLog();
+        lastCloudUpdatedAt = cloudUpdatedAt;
+        localStorage.setItem('stocks', JSON.stringify(stocks));
+        localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+        localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
+        document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+        render();
+        renderPieChart();
+        renderLineChart();
+        if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
+      }
     } else {
       // ローカルの方が新しい（または初回）→ ローカルをクラウドへ移行
       await _doSave();
