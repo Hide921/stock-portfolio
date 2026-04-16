@@ -211,51 +211,103 @@ def _yfjp_get(url: str, timeout: int = 15):
         raise
 
 
-# ── Yahoo Finance US curl_cffi Session ───────────────────────────────
-# query1/query2.finance.yahoo.com も Cookie + TLS 偽装が必要になった。
+# ── Yahoo Finance US curl_cffi Session + Crumb ───────────────────────
+# query1/query2.finance.yahoo.com は Cookie + crumb + TLS 偽装が必要。
+# crumb は finance.yahoo.com でCookieを取得後、/v1/test/getcrumb で入手する。
 _cffi_us_session = None
 _cffi_us_session_ts: float = 0.0
+_cffi_us_crumb: str | None = None
 _CFFI_US_SESSION_TTL = 1800
+_cffi_us_lock = threading.Lock()
 
 
-def _get_cffi_us_session():
-    """Yahoo Finance US 用 curl_cffi Session。未初期化または期限切れなら再構築。"""
-    global _cffi_us_session, _cffi_us_session_ts
-    if _cffi_us_session is not None and time.time() - _cffi_us_session_ts < _CFFI_US_SESSION_TTL:
-        return _cffi_us_session
-    try:
-        from curl_cffi import requests as cffi_req  # type: ignore
-        s = cffi_req.Session(impersonate='chrome124')
-        s.headers.update({
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'application/json,text/html,*/*;q=0.8',
-        })
+def _get_cffi_us_session(force: bool = False):
+    """Yahoo Finance US 用 curl_cffi Session と crumb を返す。
+    未初期化・期限切れ・force=True なら再構築。"""
+    global _cffi_us_session, _cffi_us_session_ts, _cffi_us_crumb
+    with _cffi_us_lock:
+        if (not force
+                and _cffi_us_session is not None
+                and _cffi_us_crumb is not None
+                and time.time() - _cffi_us_session_ts < _CFFI_US_SESSION_TTL):
+            return _cffi_us_session, _cffi_us_crumb
         try:
-            s.get('https://finance.yahoo.com/', timeout=10)
-            logging.info('YFUS cffi session initialized (cookie acquired)')
-        except Exception as e:
-            logging.warning(f'YFUS cffi home page failed: {e}')
-        _cffi_us_session = s
-        _cffi_us_session_ts = time.time()
-        return s
-    except ImportError:
-        return None
+            from curl_cffi import requests as cffi_req  # type: ignore
+            s = cffi_req.Session(impersonate='chrome124')
+            s.headers.update({
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'application/json,text/html,*/*;q=0.8',
+            })
+            # まずホームページを訪問して Cookie を取得
+            try:
+                s.get('https://finance.yahoo.com/', timeout=10)
+                logging.info('YFUS cffi session: cookie acquired from homepage')
+            except Exception as e:
+                logging.warning(f'YFUS cffi home page failed: {e}')
+            # crumb を取得（Cookie 取得後に呼び出す必要がある）
+            crumb = None
+            for host in ('query2', 'query1'):
+                try:
+                    cr = s.get(
+                        f'https://{host}.finance.yahoo.com/v1/test/getcrumb',
+                        headers={'Referer': 'https://finance.yahoo.com/'},
+                        timeout=10,
+                    )
+                    if cr.status_code == 200 and cr.text.strip():
+                        crumb = cr.text.strip()
+                        logging.info(f'YFUS cffi crumb acquired via {host} (len={len(crumb)})')
+                        break
+                except Exception as e:
+                    logging.debug(f'YFUS crumb fetch failed ({host}): {e}')
+            if not crumb:
+                logging.warning('YFUS cffi: crumb 取得失敗 — クラム無しで継続')
+                crumb = ''
+            _cffi_us_session = s
+            _cffi_us_crumb = crumb
+            _cffi_us_session_ts = time.time()
+            return s, crumb
+        except ImportError:
+            return None, None
+
+
+def _reset_cffi_us_session():
+    global _cffi_us_session, _cffi_us_session_ts, _cffi_us_crumb
+    with _cffi_us_lock:
+        _cffi_us_session = None
+        _cffi_us_session_ts = 0.0
+        _cffi_us_crumb = None
 
 
 def _yfus_get(url: str, timeout: int = 15):
-    """Yahoo Finance US Chart API への GET。curl_cffi で Cookie + TLS 偽装。"""
-    s = _get_cffi_us_session()
-    if s is not None:
-        try:
-            resp = s.get(url, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
-            logging.info(f'YFUS cffi: status={resp.status_code} url={url}')
-            return resp
-        except Exception as e:
-            logging.warning(f'YFUS cffi request failed ({type(e).__name__}): {e}  url={url}')
-            global _cffi_us_session, _cffi_us_session_ts
-            _cffi_us_session = None
-            _cffi_us_session_ts = 0.0
-    # フォールバック: 通常 requests
+    """Yahoo Finance US API への GET。curl_cffi で Cookie + crumb + TLS 偽装。
+    401/403 時はセッション＋crumb をリセットして1回リトライ。"""
+    import urllib.parse as _urlparse
+
+    def _inject_crumb(u: str, crumb: str) -> str:
+        if not crumb:
+            return u
+        sep = '&' if '?' in u else '?'
+        return f'{u}{sep}crumb={_urlparse.quote(crumb)}'
+
+    for attempt in range(2):
+        s, crumb = _get_cffi_us_session(force=(attempt > 0))
+        if s is not None:
+            target = _inject_crumb(url, crumb or '')
+            try:
+                resp = s.get(target, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
+                logging.info(f'YFUS cffi: status={resp.status_code} url={target}')
+                if resp.status_code in (401, 403) and attempt == 0:
+                    logging.warning(f'YFUS cffi: {resp.status_code} — crumb 期限切れ、セッションをリセット')
+                    _reset_cffi_us_session()
+                    continue
+                return resp
+            except Exception as e:
+                logging.warning(f'YFUS cffi request failed ({type(e).__name__}): {e}  url={target}')
+                _reset_cffi_us_session()
+                if attempt == 0:
+                    continue
+        # フォールバック: 通常 requests（crumb なし）
+        return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
     return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
 
 
