@@ -1628,8 +1628,9 @@ async function fetchAllPrices() {
           fetchError: 'キャッシュ',
         };
       }
-      failed++;
-      return { ...s, lastFetched: now, fetchError: '取得失敗' };
+      // 既存価格がある場合は「更新なし」扱い（未取得の銘柄のみfailed++）
+      if (!s.currentPrice) failed++;
+      return { ...s, lastFetched: now, fetchError: s.currentPrice ? '更新なし' : '取得失敗' };
     });
 
     // 成功分をキャッシュ保存
@@ -1656,7 +1657,7 @@ async function fetchAllPrices() {
     const logChanged = recordDailyLog();
 
     save();
-    render();
+    try { render(); } catch(e) { console.error('render error:', e); }
     try { renderPieChart(); } catch(e) { console.warn('renderPieChart error:', e); }
     try { renderLineChart(); } catch(e) { console.warn('renderLineChart error:', e); }
 
@@ -1666,7 +1667,7 @@ async function fetchAllPrices() {
           failed > 0 ? 'error' : 'success');
   } catch (e) {
     console.error('fetchAllPrices error:', e);
-    toast('価格取得中にエラーが発生しました', 'error');
+    toast('価格取得エラー: ' + (e?.message || e), 'error');
   } finally {
     isFetching = false;
     btn.innerHTML = '📡 価格を自動取得';
@@ -2010,7 +2011,7 @@ function closeModal(e) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.getElementById('overlay').classList.remove('open');
-    document.getElementById('syncOverlay').classList.remove('open');
+    document.getElementById('syncOverlay')?.classList.remove('open');
     editId = null;
   }
 });
