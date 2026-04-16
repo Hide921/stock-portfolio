@@ -1124,6 +1124,7 @@ let syncTimer = null;
 let isSyncing = false;
 let lastCloudUpdatedAt = null; // クラウドの最終更新日時（ポーリング用）
 let initialLoadDone = false;  // 起動時sbLoad完了フラグ
+const LOCAL_UPDATED_AT_KEY = 'stocks_updated_at';
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
@@ -1376,6 +1377,23 @@ if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(por
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
 renderCollateral();
 
+// ── Render ウォームアップ（スリープ対策）───────────────────────
+// 複数の autoFetchName が同時に呼ばれても Render へのリクエストは1本に絞る
+let _renderWakePromise = null;
+function wakeRender() {
+  if (!API_BASE) return Promise.resolve();
+  if (_renderWakePromise) return _renderWakePromise;
+  _renderWakePromise = fetch(API_BASE + '/api/health', {
+    signal: AbortSignal.timeout(65000),
+    cache: 'no-store',
+  }).catch(() => { _renderWakePromise = null; }); // 失敗したら次回リトライ可能にする
+  return _renderWakePromise;
+}
+
+// 1分ごとに価格を自動更新
+const AUTO_REFRESH_INTERVAL = 60; // 秒
+let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+
 render();
 renderPieChart();
 // 価格取得とグラフ履歴取得を並列で開始（グラフを待たせない）
@@ -1384,9 +1402,6 @@ fetchHistory(currentPeriod);
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
 
-// 1分ごとに価格を自動更新
-const AUTO_REFRESH_INTERVAL = 60; // 秒
-let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
 setInterval(fetchAllPrices, AUTO_REFRESH_INTERVAL * 1000);
 setInterval(() => {
   autoRefreshCountdown--;
@@ -1464,7 +1479,6 @@ function cacheAgeText(ts) {
 }
 
 // ── Persistence ───────────────────────────────────────────────────
-const LOCAL_UPDATED_AT_KEY = 'stocks_updated_at';
 
 function save(skipSync = false) {
   const now = new Date().toISOString();
@@ -1557,9 +1571,10 @@ async function fetchAllPrices() {
     // ── Step1: Renderに全銘柄を1回のバッチリクエスト（最速）──
     if (API_BASE) {
       try {
+        await wakeRender(); // スリープ中のRenderが起動するまで待機（最大65秒）
         const res = await fetch(
           `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
-          { signal: AbortSignal.timeout(25000), cache: 'no-store' }
+          { signal: AbortSignal.timeout(30000), cache: 'no-store' }
         );
         if (res.ok) {
           const data = await res.json();
@@ -2033,18 +2048,6 @@ function onAvgCurChange() {
   document.getElementById('avgLabel').textContent = `平均取得価格 (${avgCur==='USD'?'$':'¥'}) *`;
 }
 
-// ── Render ウォームアップ（スリープ対策）───────────────────────
-// 複数の autoFetchName が同時に呼ばれても Render へのリクエストは1本に絞る
-let _renderWakePromise = null;
-function wakeRender() {
-  if (!API_BASE) return Promise.resolve();
-  if (_renderWakePromise) return _renderWakePromise;
-  _renderWakePromise = fetch(API_BASE + '/api/health', {
-    signal: AbortSignal.timeout(65000),
-    cache: 'no-store',
-  }).catch(() => { _renderWakePromise = null; }); // 失敗したら次回リトライ可能にする
-  return _renderWakePromise;
-}
 
 let _nameFetchTimer = null;
 function onTickerInput() {
