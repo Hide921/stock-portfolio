@@ -679,30 +679,44 @@ def get_fund_price_yfjp(fund_code: str) -> dict:
     except Exception as e:
         logging.debug(f'FUND quote_api failed {fund_code}: {e}')
 
-    url  = f'https://finance.yahoo.co.jp/quote/{fund_code}'
+    # /chart URL は Render など海外サーバーからでもアクセス可能。
+    # /quote/{code} は Yahoo Japan の IP制限でブロックされることがある。
+    urls_to_try = [
+        f'https://finance.yahoo.co.jp/quote/{fund_code}/chart',  # 海外IP対応
+        f'https://finance.yahoo.co.jp/quote/{fund_code}',        # 国内IP用
+    ]
     html = None
+    _YFJP_BLOCK_MARKERS = ('表示できません', 'ご覧になろうとしているページ', 'Just a moment', 'cf-browser-verification')
 
     # ── HTML 取得（curl_cffi TLS 偽装 + リトライ）───────────────
-    for attempt in range(3):
-        try:
-            r = _yfjp_get(url, timeout=15)
-            if r.status_code == 404:
-                raise ValueError(f'ファンド {fund_code} が見つかりません (404)')
-            if r.status_code in (403, 429):
-                # セッションリセットして再試行
-                global _yfjp_session, _yfjp_session_ts
-                _yfjp_session = None
-                _yfjp_session_ts = 0.0
-                raise IOError(f'HTTP {r.status_code}')
-            r.raise_for_status()
-            html = r.text
+    for url in urls_to_try:
+        for attempt in range(2):
+            try:
+                r = _yfjp_get(url, timeout=15)
+                if r.status_code == 404:
+                    break  # このURLは存在しない → 次のURLへ
+                if r.status_code in (403, 429):
+                    global _yfjp_session, _yfjp_session_ts
+                    _yfjp_session = None
+                    _yfjp_session_ts = 0.0
+                    raise IOError(f'HTTP {r.status_code}')
+                r.raise_for_status()
+                text = r.text
+                # Yahoo Japan の IP ブロックページを検出 → 次のURLへ
+                if any(m in text for m in _YFJP_BLOCK_MARKERS):
+                    logging.debug(f'FUND: YFJP IP block detected for {url}')
+                    break
+                html = text
+                logging.debug(f'FUND: fetched {url} ({len(html)} bytes)')
+                break
+            except ValueError:
+                raise
+            except Exception as e:
+                logging.debug(f'FUND fetch attempt {attempt+1} failed {fund_code} ({url}): {e}')
+                if attempt < 1:
+                    time.sleep(1.5)
+        if html is not None:
             break
-        except ValueError:
-            raise
-        except Exception as e:
-            logging.debug(f'FUND fetch attempt {attempt+1} failed {fund_code}: {e}')
-            if attempt < 2:
-                time.sleep(1.5 * (attempt + 1))
 
     if html is None:
         # HTML 取得自体が全試行失敗 → みんかぶ → Chart API の順で試す

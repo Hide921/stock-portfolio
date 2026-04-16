@@ -700,8 +700,22 @@ function extractPreloadedState(html) {
 }
 
 async function fetchFundPage(fundCode) {
-  const url = YF_JP_BASE + encodeURIComponent(fundCode);
-  return fetchViaProxy(url);
+  // /chart URL は Render プロキシ経由（海外IP）でもアクセス可能。
+  // /quote/{code} は Yahoo Japan の IP 制限でブロックされることがある。
+  const BLOCK_MARKERS = ['表示できません', 'ご覧になろうとしているページ', 'Just a moment'];
+  const urlsToTry = [
+    YF_JP_BASE + encodeURIComponent(fundCode) + '/chart',
+    YF_JP_BASE + encodeURIComponent(fundCode),
+  ];
+  let lastErr;
+  for (const url of urlsToTry) {
+    try {
+      const html = await fetchViaProxy(url);
+      if (BLOCK_MARKERS.some(m => html.includes(m))) continue; // IP ブロックページ → 次を試す
+      return html;
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr || new Error('YFJP fetch failed');
 }
 
 async function getCurrentPriceFundJS(ticker) {
