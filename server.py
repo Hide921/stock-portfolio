@@ -31,16 +31,54 @@ def yf_ticker(ticker: str):
     return yf.Ticker(ticker)
 
 
+def _fetch_price_via_quote_summary(ticker: str) -> dict:
+    """Yahoo Finance v10 quoteSummary API で価格を取得（curl_cffi + crumb 使用）。
+    Chart API が 404 を返す投資信託コードや特殊ティッカーに対して有効。
+    regularMarketPreviousClose も取得できるため前日比が正確。"""
+    import urllib.parse as _up
+    url = f'https://query2.finance.yahoo.com/v10/finance/quoteSummary/{_up.quote(ticker)}?modules=price'
+    r = _yfus_get(url, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    result = (data.get('quoteSummary') or {}).get('result') or []
+    if not result:
+        raise ValueError(f'quoteSummary: データなし ({ticker})')
+    price_data = result[0].get('price', {})
+    price  = safe_float((price_data.get('regularMarketPrice')  or {}).get('raw'))
+    prev   = safe_float((price_data.get('regularMarketPreviousClose') or {}).get('raw'))
+    change = safe_float((price_data.get('regularMarketChange') or {}).get('raw'))
+    if price is None:
+        raise ValueError(f'quoteSummary: price is None ({ticker})')
+    currency = price_data.get('currency') or ('JPY' if ticker.endswith('.T') else 'USD')
+    if change is None and prev is not None:
+        change = round(price - prev, 4)
+    if prev is None and change is not None:
+        prev = round(price - change, 4)
+    logging.info(f'OK quoteSummary {ticker}: {price} {currency} (prev={prev})')
+    return {
+        'price':      round(price, 4),
+        'prev_close': round(prev, 4) if prev is not None else None,
+        'day_change': round(change, 4) if change is not None else None,
+        'currency':   currency,
+        'error':      None,
+    }
+
+
 def fetch_price_with_retry(ticker: str, retries: int = 2) -> dict:
-    """Chart API → yfinance fast_info の順で取得。
-    Chart API はレート制限を受けにくい直接エンドポイント。"""
+    """Chart API → v10 quoteSummary → yfinance fast_info の順で取得。"""
     # 1st: Yahoo Finance Chart API (最も信頼性が高い)
     try:
         return fetch_price_via_chart_api(ticker)
     except Exception as e:
         logging.debug(f'Chart API failed for {ticker}: {e}')
 
-    # 2nd: yfinance fast_info (バックアップ)
+    # 2nd: v10 quoteSummary（curl_cffi + crumb。Chart APIが404の投信コードに有効）
+    try:
+        return _fetch_price_via_quote_summary(ticker)
+    except Exception as e:
+        logging.debug(f'quoteSummary failed for {ticker}: {e}')
+
+    # 3rd: yfinance fast_info (最終バックアップ)
     last_err = None
     for attempt in range(retries):
         try:
