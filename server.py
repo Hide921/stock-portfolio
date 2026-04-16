@@ -116,6 +116,24 @@ _YFJP_HEADERS = {
 #後方互換のため _FUND_HEADERS_LIST も維持
 _FUND_HEADERS_LIST = [_YFJP_HEADERS]
 
+# ── Yahoo Finance レート制限防止スロットラー ─────────────────────────
+# 42銘柄の並列取得でYahoo Financeのレート制限(429)を回避するため、
+# US/JP両APIへのリクエストを150ms以上の間隔に抑制する。
+_yf_throttle_lock = threading.Lock()
+_yf_throttle_ts: float = 0.0
+_YF_THROTTLE_INTERVAL = 0.15  # 最小リクエスト間隔(秒)
+
+def _throttle_yf():
+    """Yahoo Finance への連続リクエストを間隔制限（全スレッド共通）"""
+    global _yf_throttle_ts
+    with _yf_throttle_lock:
+        now = time.time()
+        wait = _YF_THROTTLE_INTERVAL - (now - _yf_throttle_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _yf_throttle_ts = time.time()
+
+
 # ── Yahoo Finance Japan リクエスト（TLS フィンガープリント偽装）──
 # curl_cffi は yfinance の依存ライブラリとしてインストール済み。
 # Chrome の TLS ハンドシェイクを完全再現するため、
@@ -172,6 +190,7 @@ def _get_cffi_session():
 def _yfjp_get(url: str, timeout: int = 15):
     """Yahoo Finance Japan への GET。curl_cffi Session で Cookie + TLS 偽装。"""
     global _cffi_available
+    _throttle_yf()  # レート制限防止
     if _cffi_available is not False:
         try:
             s = _get_cffi_session()
@@ -280,7 +299,8 @@ def _reset_cffi_us_session():
 
 def _yfus_get(url: str, timeout: int = 15):
     """Yahoo Finance US API への GET。curl_cffi で Cookie + crumb + TLS 偽装。
-    401/403 時はセッション＋crumb をリセットして1回リトライ。"""
+    401/403 時はセッション＋crumb をリセットして1回リトライ。
+    429 時は5秒待機してリトライ。"""
     import urllib.parse as _urlparse
 
     def _inject_crumb(u: str, crumb: str) -> str:
@@ -289,6 +309,7 @@ def _yfus_get(url: str, timeout: int = 15):
         sep = '&' if '?' in u else '?'
         return f'{u}{sep}crumb={_urlparse.quote(crumb)}'
 
+    _throttle_yf()  # レート制限防止
     for attempt in range(2):
         s, crumb = _get_cffi_us_session(force=(attempt > 0))
         if s is not None:
@@ -296,6 +317,12 @@ def _yfus_get(url: str, timeout: int = 15):
             try:
                 resp = s.get(target, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
                 logging.info(f'YFUS cffi: status={resp.status_code} url={target}')
+                if resp.status_code == 429:
+                    logging.warning(f'YFUS cffi: 429 Too Many Requests — 5秒待機してリトライ url={url}')
+                    time.sleep(5)
+                    _reset_cffi_us_session()
+                    _throttle_yf()  # リトライ前にも間隔確保
+                    continue
                 if resp.status_code in (401, 403) and attempt == 0:
                     logging.warning(f'YFUS cffi: {resp.status_code} — crumb 期限切れ、セッションをリセット')
                     _reset_cffi_us_session()
@@ -1003,7 +1030,7 @@ def take_snapshot():
             d = fetch_price_with_retry(t)
         return t, d
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
         futs = {ex.submit(_fetch, t): t for t in tickers + ['USDJPY=X']}
         try:
             for fut in concurrent.futures.as_completed(futs, timeout=90):
@@ -1119,7 +1146,8 @@ def get_prices():
         return ticker, data
 
     # 並列取得 + 1銘柄あたり30秒タイムアウト
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as ex:
+    # max_workers=3: Yahoo Finance レート制限を避けるため並列数を抑制
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 3)) as ex:
         futures = {ex.submit(fetch_one, t): t for t in tickers}
         try:
             for fut in concurrent.futures.as_completed(futures, timeout=60):
@@ -1189,7 +1217,7 @@ def get_history():
         return ticker, data
 
     if need_fetch:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(need_fetch), 8)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(need_fetch), 3)) as ex:
             futures = {ex.submit(fetch_hist_one, t): t for t in need_fetch}
             try:
                 for fut in concurrent.futures.as_completed(futures, timeout=60):
