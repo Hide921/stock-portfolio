@@ -980,6 +980,9 @@ function getYahooTicker(ticker, market) {
   const t = (ticker || '').trim().toUpperCase();
   if (market === 'US')     return t;
   if (market === 'CRYPTO') return t.replace(/-USD$/i, '') + '-USD';
+  // SBI証券の7桁内部コードはYahoo Finance Japanでは先頭0を付けた8桁が正式コード
+  // 例: 3311187 → 03311187.T (eMAXIS Slim 米国株式)
+  if (/^\d{7}$/.test(t)) return '0' + t + '.T';
   return t + '.T';
 }
 function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ? 'USD' : 'JPY'; }
@@ -1066,6 +1069,11 @@ function migrateStock(s) {
   // CRYPTO なのに yahooTicker が -USD で終わっていない場合を修正
   if (s.market === 'CRYPTO' && s.yahooTicker && !/-USD$/i.test(s.yahooTicker)) {
     s.yahooTicker = getYahooTicker(s.ticker, 'CRYPTO');
+  }
+  // SBI 7桁内部コード → Yahoo Finance Japan 8桁コードへ修正（先頭0パディング）
+  // 例: yahooTicker "3311187.T" → "03311187.T"
+  if (s.yahooTicker && /^\d{7}\.T$/.test(s.yahooTicker)) {
+    s.yahooTicker = '0' + s.yahooTicker;
   }
   if (!s.currency)           s.currency    = getCurrency(s.market || 'JP');
   if (!s.avgCurrency)        s.avgCurrency = s.currency;
