@@ -38,6 +38,8 @@ def _fetch_price_via_quote_summary(ticker: str) -> dict:
     import urllib.parse as _up
     url = f'https://query2.finance.yahoo.com/v10/finance/quoteSummary/{_up.quote(ticker)}?modules=price'
     r = _yfus_get(url, timeout=15)
+    if r.status_code == 404:
+        raise TickerNotFoundError(f'quoteSummary 404: {ticker}')
     r.raise_for_status()
     data = r.json()
     result = (data.get('quoteSummary') or {}).get('result') or []
@@ -65,16 +67,27 @@ def _fetch_price_via_quote_summary(ticker: str) -> dict:
 
 
 def fetch_price_with_retry(ticker: str, retries: int = 2) -> dict:
-    """Chart API → v10 quoteSummary → yfinance fast_info の順で取得。"""
+    """Chart API → v10 quoteSummary → yfinance fast_info の順で取得。
+    Yahoo Finance が 404 を返した場合（TickerNotFoundError）は quoteSummary のみ
+    試行し、yfinance fast_info はスキップ（同じサーバに再問合せても無駄なため）。"""
+    chart_404 = False
     # 1st: Yahoo Finance Chart API (最も信頼性が高い)
     try:
         return fetch_price_via_chart_api(ticker)
+    except TickerNotFoundError as e:
+        chart_404 = True
+        logging.debug(f'Chart API 404 for {ticker}: {e}')
     except Exception as e:
         logging.debug(f'Chart API failed for {ticker}: {e}')
 
     # 2nd: v10 quoteSummary（curl_cffi + crumb。Chart APIが404の投信コードに有効）
     try:
         return _fetch_price_via_quote_summary(ticker)
+    except TickerNotFoundError as e:
+        # Chart と quoteSummary の双方が 404 ならティッカー不存在確定
+        if chart_404:
+            raise ValueError(f'ティッカー不存在: {ticker}') from e
+        logging.debug(f'quoteSummary 404 for {ticker}: {e}')
     except Exception as e:
         logging.debug(f'quoteSummary failed for {ticker}: {e}')
 
@@ -155,21 +168,56 @@ _YFJP_HEADERS = {
 _FUND_HEADERS_LIST = [_YFJP_HEADERS]
 
 # ── Yahoo Finance レート制限防止スロットラー ─────────────────────────
-# 42銘柄の並列取得でYahoo Financeのレート制限(429)を回避するため、
-# US/JP両APIへのリクエストを150ms以上の間隔に抑制する。
-_yf_throttle_lock = threading.Lock()
-_yf_throttle_ts: float = 0.0
+# US/JP はドメインが別なのでスロットラーを分離し、それぞれ独立して叩く。
+# 全共有にすると片方の待ち時間でもう一方もブロックされ、並列効率が落ちる。
 _YF_THROTTLE_INTERVAL = 0.15  # 最小リクエスト間隔(秒)
 
-def _throttle_yf():
-    """Yahoo Finance への連続リクエストを間隔制限（全スレッド共通）"""
-    global _yf_throttle_ts
-    with _yf_throttle_lock:
+_yf_throttle_us_lock = threading.Lock()
+_yf_throttle_us_ts: float = 0.0
+_yf_throttle_jp_lock = threading.Lock()
+_yf_throttle_jp_ts: float = 0.0
+
+
+def _throttle_yf_us():
+    """Yahoo Finance US (query1/query2.finance.yahoo.com) 用スロットル"""
+    global _yf_throttle_us_ts
+    with _yf_throttle_us_lock:
         now = time.time()
-        wait = _YF_THROTTLE_INTERVAL - (now - _yf_throttle_ts)
+        wait = _YF_THROTTLE_INTERVAL - (now - _yf_throttle_us_ts)
         if wait > 0:
             time.sleep(wait)
-        _yf_throttle_ts = time.time()
+        _yf_throttle_us_ts = time.time()
+
+
+def _throttle_yf_jp():
+    """Yahoo Finance Japan (finance.yahoo.co.jp) 用スロットル"""
+    global _yf_throttle_jp_ts
+    with _yf_throttle_jp_lock:
+        now = time.time()
+        wait = _YF_THROTTLE_INTERVAL - (now - _yf_throttle_jp_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _yf_throttle_jp_ts = time.time()
+
+
+# 後方互換: 既存呼び出し側が残っている場合の保険（新規コードでは使わない）
+def _throttle_yf():
+    _throttle_yf_us()
+
+
+def _parse_retry_after(header_value: str | None) -> float | None:
+    """Retry-After ヘッダを秒数に解釈。失敗時は None。"""
+    if not header_value:
+        return None
+    try:
+        return float(header_value)
+    except (TypeError, ValueError):
+        return None
+
+
+class TickerNotFoundError(Exception):
+    """Yahoo Finance が 404 を返したティッカー。後続フォールバックをスキップ。"""
+    pass
 
 
 # ── Yahoo Finance Japan リクエスト（TLS フィンガープリント偽装）──
@@ -225,47 +273,63 @@ def _get_cffi_session():
         return None
 
 
+_YF_BACKOFF_SCHEDULE = (5, 10, 20)  # 429 リトライ時の待機秒数（上限60）
+_YF_BACKOFF_CAP = 60
+
 def _yfjp_get(url: str, timeout: int = 15):
-    """Yahoo Finance Japan への GET。curl_cffi Session で Cookie + TLS 偽装。"""
-    global _cffi_available
-    _throttle_yf()  # レート制限防止
-    if _cffi_available is not False:
+    """Yahoo Finance Japan への GET。curl_cffi Session で Cookie + TLS 偽装。
+    429 時は指数バックオフ（Retry-After を尊重）で最大3回リトライ。"""
+    global _cffi_available, _cffi_session, _cffi_session_ts
+
+    for attempt in range(len(_YF_BACKOFF_SCHEDULE) + 1):
+        _throttle_yf_jp()
+        resp = None
         try:
-            s = _get_cffi_session()
-            if s is None:
-                raise ImportError('curl_cffi not available')
-            resp = s.get(
-                url,
-                headers={'Referer': 'https://finance.yahoo.co.jp/'},
-                timeout=timeout,
-            )
-            _cffi_available = True
-            if _is_cf_challenge(resp.text):
-                logging.warning(f'YFJP curl_cffi: Cloudflare JS challenge (status={resp.status_code}) url={url}')
+            if _cffi_available is not False:
+                s = _get_cffi_session()
+                if s is None:
+                    _cffi_available = False
+                    raise ImportError('curl_cffi not available')
+                resp = s.get(
+                    url,
+                    headers={'Referer': 'https://finance.yahoo.co.jp/'},
+                    timeout=timeout,
+                )
+                _cffi_available = True
+                label = 'YFJP curl_cffi'
             else:
-                logging.info(f'YFJP curl_cffi: status={resp.status_code} url={url}')
-            return resp
+                resp = _get_yfjp_session().get(url, timeout=timeout)
+                label = 'YFJP session'
         except ImportError:
             _cffi_available = False
             logging.warning('curl_cffi not installed — falling back to requests.Session')
+            continue
         except Exception as e:
-            logging.warning(f'curl_cffi request failed ({type(e).__name__}): {e}  url={url}')
-            # セッションをリセットして次回再構築
-            global _cffi_session, _cffi_session_ts
+            logging.warning(f'YFJP request failed ({type(e).__name__}): {e}  url={url}')
             _cffi_session = None
             _cffi_session_ts = 0.0
+            if attempt < len(_YF_BACKOFF_SCHEDULE):
+                time.sleep(1)
+                continue
+            raise
 
-    # フォールバック: requests + Cookie セッション
-    try:
-        resp2 = _get_yfjp_session().get(url, timeout=timeout)
-        if _is_cf_challenge(resp2.text):
-            logging.warning(f'YFJP session: Cloudflare JS challenge (status={resp2.status_code}) url={url}')
+        if resp.status_code == 429 and attempt < len(_YF_BACKOFF_SCHEDULE):
+            wait = _parse_retry_after(resp.headers.get('Retry-After')) or _YF_BACKOFF_SCHEDULE[attempt]
+            wait = min(wait, _YF_BACKOFF_CAP)
+            logging.warning(f'{label}: 429 Too Many Requests — backoff {wait}s (attempt={attempt+1}/{len(_YF_BACKOFF_SCHEDULE)+1}) url={url}')
+            _cffi_session = None
+            _cffi_session_ts = 0.0
+            time.sleep(wait)
+            continue
+
+        if _is_cf_challenge(resp.text):
+            logging.warning(f'{label}: Cloudflare JS challenge (status={resp.status_code}) url={url}')
         else:
-            logging.info(f'YFJP session: status={resp2.status_code} url={url}')
-        return resp2
-    except Exception as e:
-        logging.warning(f'YFJP session request failed ({type(e).__name__}): {e}  url={url}')
-        raise
+            logging.info(f'{label}: status={resp.status_code} url={url}')
+        return resp
+
+    # ここには通常到達しない（例外で抜ける想定）
+    return resp
 
 
 # ── Yahoo Finance US curl_cffi Session + Crumb ───────────────────────
@@ -337,8 +401,9 @@ def _reset_cffi_us_session():
 
 def _yfus_get(url: str, timeout: int = 15):
     """Yahoo Finance US API への GET。curl_cffi で Cookie + crumb + TLS 偽装。
-    401/403 時はセッション＋crumb をリセットして1回リトライ。
-    429 時は5秒待機してリトライ。"""
+    401/403 時はセッション＋crumb をリセットしてリトライ。
+    429 時は指数バックオフ（5s→10s→20s、Retry-After があれば尊重）で最大3回。
+    404 はそのまま返す（呼び出し側で TickerNotFoundError に変換）。"""
     import urllib.parse as _urlparse
 
     def _inject_crumb(u: str, crumb: str) -> str:
@@ -347,32 +412,49 @@ def _yfus_get(url: str, timeout: int = 15):
         sep = '&' if '?' in u else '?'
         return f'{u}{sep}crumb={_urlparse.quote(crumb)}'
 
-    _throttle_yf()  # レート制限防止
-    for attempt in range(2):
+    max_attempts = len(_YF_BACKOFF_SCHEDULE) + 1  # 計4回
+    auth_retry_used = False
+    for attempt in range(max_attempts):
+        _throttle_yf_us()
         s, crumb = _get_cffi_us_session(force=(attempt > 0))
-        if s is not None:
-            target = _inject_crumb(url, crumb or '')
-            try:
-                resp = s.get(target, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
-                logging.info(f'YFUS cffi: status={resp.status_code} url={target}')
-                if resp.status_code == 429:
-                    logging.warning(f'YFUS cffi: 429 Too Many Requests — 5秒待機してリトライ url={url}')
-                    time.sleep(5)
-                    _reset_cffi_us_session()
-                    _throttle_yf()  # リトライ前にも間隔確保
-                    continue
-                if resp.status_code in (401, 403) and attempt == 0:
-                    logging.warning(f'YFUS cffi: {resp.status_code} — crumb 期限切れ、セッションをリセット')
-                    _reset_cffi_us_session()
-                    continue
-                return resp
-            except Exception as e:
-                logging.warning(f'YFUS cffi request failed ({type(e).__name__}): {e}  url={target}')
-                _reset_cffi_us_session()
-                if attempt == 0:
-                    continue
-        # フォールバック: 通常 requests（crumb なし）
-        return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
+        if s is None:
+            # curl_cffi が使えない場合は素の requests にフォールバック（1回で終了）
+            return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
+        target = _inject_crumb(url, crumb or '')
+        try:
+            resp = s.get(target, headers={'Referer': 'https://finance.yahoo.com/'}, timeout=timeout)
+        except Exception as e:
+            logging.warning(f'YFUS cffi request failed ({type(e).__name__}): {e}  url={target}')
+            _reset_cffi_us_session()
+            if attempt < max_attempts - 1:
+                time.sleep(1)
+                continue
+            # 最終フォールバック: 素の requests
+            return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
+
+        logging.info(f'YFUS cffi: status={resp.status_code} url={target}')
+
+        if resp.status_code == 404:
+            # ティッカー不存在はここで即返す。呼び出し側が判断。
+            return resp
+
+        if resp.status_code == 429 and attempt < max_attempts - 1:
+            wait = _parse_retry_after(resp.headers.get('Retry-After')) or _YF_BACKOFF_SCHEDULE[attempt]
+            wait = min(wait, _YF_BACKOFF_CAP)
+            logging.warning(f'YFUS cffi: 429 — backoff {wait}s (attempt={attempt+1}/{max_attempts}) url={url}')
+            _reset_cffi_us_session()
+            time.sleep(wait)
+            continue
+
+        if resp.status_code in (401, 403) and not auth_retry_used:
+            logging.warning(f'YFUS cffi: {resp.status_code} — crumb 期限切れ、セッションをリセット')
+            _reset_cffi_us_session()
+            auth_retry_used = True
+            continue
+
+        return resp
+
+    # 規定回数超過時: 素の requests で最終試行
     return req.get(url, headers=_YF_API_HEADERS, timeout=timeout)
 
 
@@ -445,6 +527,8 @@ def fetch_price_via_chart_api(ticker: str) -> dict:
     import urllib.parse
     url = f'https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(ticker)}?interval=1d&range=5d'
     r = _yfus_get(url, timeout=15)
+    if r.status_code == 404:
+        raise TickerNotFoundError(f'Chart API 404: {ticker}')
     r.raise_for_status()
     data = r.json()
     result = data['chart']['result'][0]
@@ -1153,6 +1237,60 @@ def proxy():
         return jsonify({'error': str(e)}), 502
 
 
+def _classify_ticker(ticker: str) -> str:
+    """US (query*.finance.yahoo.com) か JP (finance.yahoo.co.jp) かを分類。
+    投信と日本株は JP プール、それ以外は US プール。"""
+    if is_fund_ticker(ticker):
+        return 'jp'
+    if ticker.endswith('.T'):
+        return 'us'  # 日本株の株価は Chart API (query2) 経由なので US プール
+    return 'us'
+
+
+def _fetch_one_price(ticker: str) -> dict:
+    """キャッシュ確認 → 実取得。例外はそのまま伝播（呼び出し側でハンドル）。"""
+    cached = _cached_price(ticker)
+    if cached:
+        logging.info(f'CACHE {ticker}')
+        return cached
+    if is_fund_ticker(ticker):
+        fund_code = ticker[:-2]
+        data = get_fund_price_yfjp(fund_code)
+    else:
+        data = fetch_price_with_retry(ticker)
+        logging.info(f'OK   {ticker}: {data["price"]} ({data["currency"]})')
+    _store_price(ticker, data)
+    return data
+
+
+def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeout: int):
+    """指定ティッカーを ThreadPool で並列取得。(成功dict, 失敗dict) を返す。"""
+    ok: dict = {}
+    err: dict = {}
+    if not tickers:
+        return ok, err
+    workers = max(1, min(len(tickers), max_workers))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_fetch_one_price, t): t for t in tickers}
+        try:
+            for fut in concurrent.futures.as_completed(futures, timeout=pool_timeout):
+                t = futures[fut]
+                try:
+                    ok[t] = fut.result(timeout=per_task_timeout)
+                except Exception as e:
+                    logging.warning(f'ERR  {t}: {e}')
+                    err[t] = str(e)
+        except concurrent.futures.TimeoutError:
+            logging.warning('PRICE fetch timeout: return partial result')
+        for fut, t in futures.items():
+            if fut.done():
+                continue
+            fut.cancel()
+            if t not in ok and t not in err:
+                err[t] = 'timeout'
+    return ok, err
+
+
 @app.route('/api/prices')
 def get_prices():
     """
@@ -1161,50 +1299,51 @@ def get_prices():
       日本株  → {code}.T   (例: 7203.T)
       米国株  → {code}     (例: AAPL)
       投資信託 → {code}.T  (例: 0131103C.T)
+    US/JP は別ドメインなのでプールを分け独立並列実行。
+    失敗した銘柄は 2 秒待機後に 1 回だけ自動リトライする。
     """
     tickers_param = request.args.get('tickers', '').strip()
     if not tickers_param:
         return jsonify({'error': 'tickersパラメータが必要です'}), 400
 
     tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
-    result  = {}
 
-    def fetch_one(ticker):
-        cached = _cached_price(ticker)
-        if cached:
-            logging.info(f'CACHE {ticker}')
-            return ticker, cached
-        if is_fund_ticker(ticker):
-            fund_code = ticker[:-2]
-            data = get_fund_price_yfjp(fund_code)
-        else:
-            data = fetch_price_with_retry(ticker)
-            logging.info(f'OK   {ticker}: {data["price"]} ({data["currency"]})')
-        _store_price(ticker, data)
-        return ticker, data
+    # US (query*.finance.yahoo.com) と JP (finance.yahoo.co.jp) でプール分離
+    us_tickers = [t for t in tickers if _classify_ticker(t) == 'us']
+    jp_tickers = [t for t in tickers if _classify_ticker(t) == 'jp']
 
-    # 並列取得 + 1銘柄あたり30秒タイムアウト
-    # max_workers=3: Yahoo Finance レート制限を避けるため並列数を抑制
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tickers), 3)) as ex:
-        futures = {ex.submit(fetch_one, t): t for t in tickers}
-        try:
-            for fut in concurrent.futures.as_completed(futures, timeout=60):
-                t = futures[fut]
-                try:
-                    _, data = fut.result(timeout=30)
-                    result[t] = data
-                except Exception as e:
-                    logging.warning(f'ERR  {t}: {e}')
-                    result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': str(e)}
-        except concurrent.futures.TimeoutError:
-            logging.warning('PRICE fetch timeout: return partial result')
+    # 両プールを同時に走らせる（ネストした Executor でブロック回避）
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+        fut_us = outer.submit(_run_pool, us_tickers, 3, 60, 30)
+        fut_jp = outer.submit(_run_pool, jp_tickers, 3, 60, 30)
+        ok_us, err_us = fut_us.result()
+        ok_jp, err_jp = fut_jp.result()
 
-        for fut, t in futures.items():
-            if fut.done():
-                continue
-            fut.cancel()
-            if t not in result:
-                result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': 'timeout'}
+    result: dict = {}
+    result.update(ok_us)
+    result.update(ok_jp)
+    failed = {**err_us, **err_jp}
+
+    # ── 部分失敗の自動リトライ（1回）──
+    # タイムアウトや 429 の一時的失敗は多くの場合 2秒待って再試行で救済できる
+    if failed:
+        retry_us = [t for t in failed if _classify_ticker(t) == 'us']
+        retry_jp = [t for t in failed if _classify_ticker(t) == 'jp']
+        logging.info(f'RETRY {len(failed)} tickers (US={len(retry_us)}, JP={len(retry_jp)})')
+        time.sleep(2)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+            fut_us = outer.submit(_run_pool, retry_us, 2, 45, 25)
+            fut_jp = outer.submit(_run_pool, retry_jp, 2, 45, 25)
+            ok_us2, err_us2 = fut_us.result()
+            ok_jp2, err_jp2 = fut_jp.result()
+        result.update(ok_us2)
+        result.update(ok_jp2)
+        failed = {**err_us2, **err_jp2}
+
+    # 失敗したティッカーはエラー構造体で埋める
+    for t, msg in failed.items():
+        if t not in result:
+            result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': msg}
 
     return jsonify(result)
 

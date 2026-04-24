@@ -1660,7 +1660,9 @@ async function fetchAllPrices() {
       }
       // 既存価格がある場合は「更新なし」扱い（未取得の銘柄のみfailed++）
       if (!s.currentPrice) failed++;
-      return { ...s, lastFetched: now, fetchError: s.currentPrice ? '更新なし' : '取得失敗' };
+      const apiErr = d?.error ? String(d.error).slice(0, 80) : null;
+      const label = apiErr ? `失敗: ${apiErr}` : (s.currentPrice ? '更新なし' : '取得失敗');
+      return { ...s, lastFetched: now, fetchError: label };
     });
 
     // 成功分をキャッシュ保存
