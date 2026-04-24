@@ -1194,10 +1194,11 @@ def take_snapshot():
     }
     gist_url = f'https://api.github.com/gists/{gist_id}'
 
-    # ── 1. Gistからポートフォリオデータを取得 ──
+    # ── 1. Gistからポートフォリオデータを取得（etag も取得しておく）──
     try:
         r = req.get(gist_url, headers=gist_headers_map, timeout=10)
         r.raise_for_status()
+        gist_etag = r.headers.get('ETag')
         content = r.json()['files']['portfolio.json']['content']
         payload = json.loads(content)
     except Exception as e:
@@ -1210,33 +1211,30 @@ def take_snapshot():
     if not stocks_data:
         return jsonify({'error': 'ポートフォリオが空です'}), 400
 
-    # ── 2. 全銘柄の価格を並列取得 ──
+    # ── 2. 全銘柄の価格を取得（バッチ優先 + US/JP 別プール並列） ──
     tickers = list({s['yahooTicker'] for s in stocks_data if s.get('yahooTicker')})
-    prices  = {}
+    all_tickers = tickers + ['USDJPY=X']
+    prices: dict = {}
 
-    def _fetch(t):
-        if is_fund_ticker(t):
-            d = get_fund_price_yfjp(t[:-2])
-        else:
-            d = fetch_price_with_retry(t)
-        return t, d
+    # Step 2a: v7 quote バッチ一括取得（投信以外）
+    batch_candidates = [t for t in all_tickers if not is_fund_ticker(t)]
+    try:
+        prices.update(fetch_prices_batch(batch_candidates))
+    except Exception as e:
+        logging.warning(f'SNAPSHOT batch fetch failed ({type(e).__name__}): {e}')
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-        futs = {ex.submit(_fetch, t): t for t in tickers + ['USDJPY=X']}
-        try:
-            for fut in concurrent.futures.as_completed(futs, timeout=90):
-                t = futs[fut]
-                try:
-                    _, d = fut.result(timeout=30)
-                    prices[t] = d
-                except Exception as e:
-                    logging.warning(f'SNAPSHOT price err {t}: {e}')
-        except concurrent.futures.TimeoutError:
-            logging.warning('SNAPSHOT price fetch timeout: partial data will be used')
-            for fut, t in futs.items():
-                if not fut.done():
-                    fut.cancel()
-                    logging.warning(f'SNAPSHOT price timeout {t}')
+    # Step 2b: バッチで取れなかった銘柄を US/JP 別プールで個別取得
+    remaining = [t for t in all_tickers if t not in prices]
+    us_remain = [t for t in remaining if _classify_ticker(t) == 'us']
+    jp_remain = [t for t in remaining if _classify_ticker(t) == 'jp']
+    if us_remain or jp_remain:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+            fut_us = outer.submit(_run_pool, us_remain, 3, 75, 30)
+            fut_jp = outer.submit(_run_pool, jp_remain, 3, 75, 30)
+            ok_us, _err_us = fut_us.result()
+            ok_jp, _err_jp = fut_jp.result()
+        prices.update(ok_us)
+        prices.update(ok_jp)
 
     # ── 3. 円換算合計（現物のみ）を計算 ──
     usdjpy = safe_float((prices.get('USDJPY=X') or {}).get('price')) or 150.0
@@ -1256,27 +1254,56 @@ def take_snapshot():
     if total <= 0:
         return jsonify({'error': '有効な価格データなし'}), 500
 
-    # ── 4. ログに今日の値を記録（1日1エントリ・上書き）──
+    # ── 4. 今日のエントリを構築（マージは次ステップで実施）──
     today = _date.today().isoformat()
     entry = {'date': today, 'value': round(total)}
-    idx   = next((i for i, e in enumerate(log) if e['date'] == today), -1)
-    if idx >= 0:
-        log[idx] = entry
-    else:
-        log.append(entry)
-    log.sort(key=lambda e: e['date'])
-    if len(log) > 730:
-        log = log[-730:]
 
-    # ── 5. Gistに保存 ──
-    new_payload = {'stocks': stocks_data, 'log': log}
+    # ── 5. Gistに保存（TOCTOU 対策: 書き込み直前に再 GET して最新の stocks/log にマージ）
+    # 価格取得中に別プロセス（フロントの同期）が Gist を更新する可能性があるため、
+    # 書き込み直前に最新データを取り直し、自分の変更（log への entry 追加）だけを
+    # 重ねてから PATCH することで、他プロセスの書き込みを上書きしないようにする。
     try:
-        r = req.patch(gist_url, headers=gist_headers_map, timeout=10,
+        r_now = req.get(gist_url, headers=gist_headers_map, timeout=10)
+        r_now.raise_for_status()
+        latest_raw = r_now.json()['files']['portfolio.json']['content']
+        latest_payload = json.loads(latest_raw)
+        latest_stocks = latest_payload if isinstance(latest_payload, list) else latest_payload.get('stocks', stocks_data)
+        latest_log    = [] if isinstance(latest_payload, list) else latest_payload.get('log', [])
+    except Exception as e:
+        logging.warning(f'SNAPSHOT gist re-GET failed ({type(e).__name__}): {e} — falling back to earlier snapshot')
+        latest_stocks = stocks_data
+        latest_log    = log
+
+    # ログに今日の値をマージ（同日エントリは上書き）
+    idx = next((i for i, e in enumerate(latest_log) if e.get('date') == today), -1)
+    if idx >= 0:
+        latest_log[idx] = entry
+    else:
+        latest_log.append(entry)
+    latest_log.sort(key=lambda e: e.get('date', ''))
+    if len(latest_log) > 730:
+        latest_log = latest_log[-730:]
+
+    new_payload = {'stocks': latest_stocks, 'log': latest_log}
+    # If-Match で条件付き更新（Gist API が無視する場合もあるがログに残す）
+    patch_headers = dict(gist_headers_map)
+    if gist_etag:
+        patch_headers['If-Match'] = gist_etag
+    try:
+        r = req.patch(gist_url, headers=patch_headers, timeout=10,
                       json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
+        if r.status_code == 412:
+            logging.warning('SNAPSHOT gist 412 (etag mismatch) — retrying without If-Match after re-merge')
+            # 既に最新データにマージ済みなので、If-Match 抜きで保存
+            patch_headers.pop('If-Match', None)
+            r = req.patch(gist_url, headers=patch_headers, timeout=10,
+                          json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
         r.raise_for_status()
     except Exception as e:
         logging.warning(f'SNAPSHOT gist PATCH failed ({type(e).__name__})')
         return jsonify({'error': 'Gist保存失敗'}), 502
+    # 以後のログ出力用にローカル変数を揃える
+    log = latest_log
 
     logging.info(f'SNAPSHOT {today}: ¥{round(total):,} (log={len(log)}件)')
     return jsonify({'ok': True, 'date': today, 'value': round(total), 'log_count': len(log)})

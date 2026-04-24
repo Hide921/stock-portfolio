@@ -6,8 +6,12 @@
   <title>株式ポートフォリオ管理</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="apple-touch-icon" href="favicon.svg">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+          integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.104.1"
+          integrity="sha384-ZstPgNL30sIz6Hlxmz87Qsg817okoeAfmzXv89YLICmfsKv3pEdQKOokOL2IpVAS"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     :root {
       --bg: #0f1117; --surface: #1a1d27; --surface2: #242736; --border: #2e3148;
@@ -2294,8 +2298,8 @@ function renderImportPreview(headers, colMap) {
     const found = colMap[k] >= 0;
     const cls   = found ? 'found' : (REQUIRED.has(k) ? 'missing' : 'optional');
     const icon  = found ? '✓' : '–';
-    const col   = found ? ` (${headers[colMap[k]]})` : '';
-    return `<span class="col-tag ${cls}">${icon} ${label}${col}</span>`;
+    const col   = found ? ` (${esc(headers[colMap[k]])})` : '';
+    return `<span class="col-tag ${cls}">${icon} ${esc(label)}${col}</span>`;
   }).join('');
 
   const newCount  = importRows.filter(r => !r.duplicate).length;
@@ -2309,16 +2313,16 @@ function renderImportPreview(headers, colMap) {
     `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>取引種別</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
     `<tbody>` + importRows.map((r, i) => {
       const nameCell = r.name
-        ? r.name
+        ? esc(r.name)
         : r.duplicate
-          ? (stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType)?.name || '—')
+          ? esc(stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType)?.name || '—')
           : `<span class="importing-name">取得中...</span>`;
       return `
       <tr class="${r.duplicate ? 'skip' : ''}">
-        <td>${r.ticker}</td>
+        <td>${esc(r.ticker)}</td>
         <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
-        <td>${r.market}</td>
-        <td>${tradeLabel[r.tradeType] || r.tradeType}</td>
+        <td>${esc(r.market)}</td>
+        <td>${esc(tradeLabel[r.tradeType] || r.tradeType)}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
         <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
         <td class="${r.duplicate ? 'badge-skip' : 'badge-new'}">${r.duplicate ? '⚠ 既存' : '✓ 新規'}</td>
