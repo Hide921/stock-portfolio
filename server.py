@@ -116,6 +116,66 @@ def fetch_price_with_retry(ticker: str, retries: int = 2) -> dict:
 
     raise last_err or ValueError('価格取得失敗')
 
+
+def fetch_prices_batch(tickers: list) -> dict:
+    """Yahoo Finance v7 quote API で複数ティッカーを一括取得。
+    1リクエストで多数取得できるため、全個別取得より高速 & レート制限に優しい。
+    取得できなかったシンボルは返さない（呼び出し側で個別フォールバック）。
+    API が 401/403/404/500 や空結果を返した場合は空 dict を返す。"""
+    import urllib.parse as _up
+    if not tickers:
+        return {}
+    # 重複排除（順序は維持しなくてよい）
+    unique = list({t for t in tickers if t})
+    if not unique:
+        return {}
+    # Yahoo の実績的上限は 50 程度。安全のため 40 でチャンク分割。
+    CHUNK = 40
+    out: dict = {}
+    for i in range(0, len(unique), CHUNK):
+        chunk = unique[i:i + CHUNK]
+        symbols = ','.join(chunk)
+        url = f'https://query2.finance.yahoo.com/v7/finance/quote?symbols={_up.quote(symbols)}'
+        try:
+            r = _yfus_get(url, timeout=20)
+        except Exception as e:
+            logging.warning(f'BATCH quote request failed: {e}')
+            continue
+        if r.status_code != 200:
+            logging.warning(f'BATCH quote non-200: status={r.status_code}')
+            continue
+        try:
+            data = r.json()
+        except Exception as e:
+            logging.warning(f'BATCH quote JSON parse failed: {e}')
+            continue
+        results = (data.get('quoteResponse') or {}).get('result') or []
+        for item in results:
+            sym = item.get('symbol')
+            if not sym:
+                continue
+            price  = safe_float(item.get('regularMarketPrice'))
+            prev   = safe_float(item.get('regularMarketPreviousClose'))
+            change = safe_float(item.get('regularMarketChange'))
+            if price is None:
+                continue
+            if change is None and prev is not None:
+                change = round(price - prev, 4)
+            if prev is None and change is not None:
+                prev = round(price - change, 4)
+            currency = item.get('currency') or ('JPY' if sym.endswith('.T') else 'USD')
+            out[sym] = {
+                'price':      round(price, 4),
+                'prev_close': round(prev, 4) if prev is not None else None,
+                'day_change': round(change, 4) if change is not None else None,
+                'currency':   currency,
+                'error':      None,
+            }
+    if out:
+        logging.info(f'BATCH quote: {len(out)}/{len(unique)} tickers resolved')
+    return out
+
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
@@ -513,13 +573,21 @@ def _require_internal_api_key() -> tuple[bool, tuple | None]:
 
 
 def _is_allowed_proxy_url(url: str) -> bool:
+    """Yahoo Finance ドメインへの転送のみ許可（SSRF 対策）。
+    userinfo (`user@host` 形式) を含む URL は拒否（host 偽装攻撃を防ぐ）。"""
     try:
         p = urlparse(url)
     except Exception:
         return False
     if p.scheme not in {'http', 'https'}:
         return False
+    # userinfo 経由の host 偽装を防止（例: https://finance.yahoo.com@attacker.com/）
+    if p.username or p.password or '@' in (p.netloc or ''):
+        return False
     host = (p.hostname or '').lower()
+    # ホスト名に明示ポートが含まれる場合も拒否（:80/:443 以外）
+    if p.port is not None and p.port not in (80, 443):
+        return False
     return host in _ALLOWED_PROXY_HOSTS
 
 def fetch_price_via_chart_api(ticker: str) -> dict:
@@ -1087,8 +1155,8 @@ def data_store():
             content = r.json()['files'].get('portfolio.json', {}).get('content', '[]')
             return Response(content, content_type='application/json')
         except Exception as e:
-            logging.warning(f'DATA GET ERR: {e}')
-            return jsonify({'error': str(e)}), 502
+            logging.warning(f'DATA GET ERR ({type(e).__name__})')
+            return jsonify({'error': 'gist fetch failed'}), 502
 
     else:  # POST
         try:
@@ -1098,8 +1166,8 @@ def data_store():
             r.raise_for_status()
             return jsonify({'ok': True})
         except Exception as e:
-            logging.warning(f'DATA POST ERR: {e}')
-            return jsonify({'error': str(e)}), 502
+            logging.warning(f'DATA POST ERR ({type(e).__name__})')
+            return jsonify({'error': 'gist save failed'}), 502
 
 
 @app.route('/api/snapshot')
@@ -1133,7 +1201,8 @@ def take_snapshot():
         content = r.json()['files']['portfolio.json']['content']
         payload = json.loads(content)
     except Exception as e:
-        return jsonify({'error': f'Gist読込失敗: {e}'}), 502
+        logging.warning(f'SNAPSHOT gist GET failed ({type(e).__name__})')
+        return jsonify({'error': 'Gist読込失敗'}), 502
 
     stocks_data = payload if isinstance(payload, list) else payload.get('stocks', [])
     log         = [] if isinstance(payload, list) else payload.get('log', [])
@@ -1206,7 +1275,8 @@ def take_snapshot():
                       json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
         r.raise_for_status()
     except Exception as e:
-        return jsonify({'error': f'Gist保存失敗: {e}'}), 502
+        logging.warning(f'SNAPSHOT gist PATCH failed ({type(e).__name__})')
+        return jsonify({'error': 'Gist保存失敗'}), 502
 
     logging.info(f'SNAPSHOT {today}: ¥{round(total):,} (log={len(log)}件)')
     return jsonify({'ok': True, 'date': today, 'value': round(total), 'log_count': len(log)})
@@ -1234,7 +1304,7 @@ def proxy():
         return Response(r.content, status=r.status_code, content_type=content_type)
     except Exception as e:
         logging.warning(f'PROXY ERR {url}: {e}')
-        return jsonify({'error': str(e)}), 502
+        return jsonify({'error': 'upstream fetch failed'}), 502
 
 
 def _classify_ticker(ticker: str) -> str:
@@ -1308,21 +1378,46 @@ def get_prices():
 
     tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
 
-    # US (query*.finance.yahoo.com) と JP (finance.yahoo.co.jp) でプール分離
-    us_tickers = [t for t in tickers if _classify_ticker(t) == 'us']
-    jp_tickers = [t for t in tickers if _classify_ticker(t) == 'jp']
-
-    # 両プールを同時に走らせる（ネストした Executor でブロック回避）
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
-        fut_us = outer.submit(_run_pool, us_tickers, 3, 60, 30)
-        fut_jp = outer.submit(_run_pool, jp_tickers, 3, 60, 30)
-        ok_us, err_us = fut_us.result()
-        ok_jp, err_jp = fut_jp.result()
-
+    # ── Step 0: キャッシュ優先 ──
     result: dict = {}
-    result.update(ok_us)
-    result.update(ok_jp)
-    failed = {**err_us, **err_jp}
+    uncached = []
+    for t in tickers:
+        cached = _cached_price(t)
+        if cached:
+            logging.info(f'CACHE {t}')
+            result[t] = cached
+        else:
+            uncached.append(t)
+
+    # ── Step 1: v7 quote API で米国株・日本株を一括取得 ──
+    # 投信（8桁.T）はバッチ API で取得できないため除外。
+    batch_candidates = [t for t in uncached if not is_fund_ticker(t)]
+    if batch_candidates:
+        try:
+            batch_result = fetch_prices_batch(batch_candidates)
+        except Exception as e:
+            logging.warning(f'BATCH quote failed: {e}')
+            batch_result = {}
+        for t, data in batch_result.items():
+            result[t] = data
+            _store_price(t, data)
+
+    # ── Step 2: バッチで取れなかった分を個別取得（US/JP 別プール並列） ──
+    remaining = [t for t in uncached if t not in result]
+    us_tickers = [t for t in remaining if _classify_ticker(t) == 'us']
+    jp_tickers = [t for t in remaining if _classify_ticker(t) == 'jp']
+
+    if us_tickers or jp_tickers:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+            fut_us = outer.submit(_run_pool, us_tickers, 3, 60, 30)
+            fut_jp = outer.submit(_run_pool, jp_tickers, 3, 60, 30)
+            ok_us, err_us = fut_us.result()
+            ok_jp, err_jp = fut_jp.result()
+        result.update(ok_us)
+        result.update(ok_jp)
+        failed = {**err_us, **err_jp}
+    else:
+        failed = {}
 
     # ── 部分失敗の自動リトライ（1回）──
     # タイムアウトや 429 の一時的失敗は多くの場合 2秒待って再試行で救済できる
