@@ -953,7 +953,10 @@ const COLORS = [
 
 // ── State ─────────────────────────────────────────────────────────
 let stocks        = [];
-let usdJpyRate    = 150;
+let usdJpyRate    = (() => {
+  const saved = Number(localStorage.getItem('usdjpy_rate'));
+  return Number.isFinite(saved) && saved > 0 ? saved : 150;
+})();
 let apiOnline     = false;
 let isFetching    = false;
 let isFetchQueued = false;
@@ -1557,6 +1560,7 @@ async function fetchRate() {
   try {
     const d = await getCurrentPrice('USDJPY=X');
     usdJpyRate = d.price;
+    try { localStorage.setItem('usdjpy_rate', String(usdJpyRate)); } catch(e) {}
     document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
     document.getElementById('rateTime').textContent  =
       '更新: ' + new Date().toLocaleTimeString('ja-JP');
@@ -1627,6 +1631,7 @@ async function fetchAllPrices() {
     // USDJPY 更新
     if (priceMap['USDJPY=X']) {
       usdJpyRate = priceMap['USDJPY=X'].price;
+      try { localStorage.setItem('usdjpy_rate', String(usdJpyRate)); } catch(e) {}
       document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
       document.getElementById('rateTime').textContent  =
         '更新: ' + new Date().toLocaleTimeString('ja-JP');
