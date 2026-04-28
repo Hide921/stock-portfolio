@@ -1637,14 +1637,17 @@ async function fetchAllPrices() {
         '更新: ' + new Date().toLocaleTimeString('ja-JP');
     }
 
-    let updated = 0, failed = 0;
+    let updated = 0, failed = 0, changed = 0, unchanged = 0;
     const now = new Date().toISOString();
     const cache = loadPriceCache();
+    // 変動検出用: 更新前の価格をスナップショット
+    const oldPrices = Object.fromEntries(stocks.map(s => [s.id, s.currentPrice]));
 
     stocks = stocks.map(s => {
       const d = priceMap[s.yahooTicker];
       if (d?.price) {
         updated++;
+        if (oldPrices[s.id] !== d.price) changed++; else unchanged++;
         return {
           ...s,
           currentPrice: d.price,
@@ -1704,8 +1707,25 @@ async function fetchAllPrices() {
 
     if (logChanged && updated > 0) sbSave(true); // 当日ログが更新されたら即同期
 
-    toast(failed > 0 ? `${updated}件更新, ${failed}件失敗` : `${updated}件の価格を更新しました`,
-          failed > 0 ? 'error' : 'success');
+    // トースト: 「実際に価格が変動した件数」を反映
+    let toastMsg, toastType;
+    if (failed > 0) {
+      toastMsg = `${updated}件更新, ${failed}件失敗`;
+      toastType = 'error';
+    } else if (updated === 0) {
+      toastMsg = '価格を更新できませんでした';
+      toastType = 'error';
+    } else if (changed === 0) {
+      toastMsg = `価格に変動なし（${unchanged}件、サーバキャッシュ）`;
+      toastType = 'success';
+    } else if (unchanged > 0) {
+      toastMsg = `${changed}件更新（${unchanged}件変動なし）`;
+      toastType = 'success';
+    } else {
+      toastMsg = `${changed}件の価格を更新しました`;
+      toastType = 'success';
+    }
+    toast(toastMsg, toastType);
   } catch (e) {
     console.error('fetchAllPrices error:', e);
     toast('価格取得エラー: ' + (e?.message || e), 'error');
