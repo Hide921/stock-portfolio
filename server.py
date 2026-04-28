@@ -1138,20 +1138,58 @@ def _get_price_ttl(ticker: str) -> int:
         return TTL_TRADING if _is_us_market_open() else TTL_OFF_HOURS
     return PRICE_CACHE_TTL
 
+def _store_price(ticker: str, data: dict):
+    # cache_age_sec / stale はキャッシュ自体には保存しない（_cached_price で都度計算）
+    clean = {k: v for k, v in data.items() if k not in ('cache_age_sec', 'stale')}
+    _price_cache[ticker] = {'data': clean, 'ts': time.time()}
+
+# ── Stale-While-Revalidate (SWR) ──────────────────────────────────
+# TTL を超えても 2倍までは古いキャッシュを即返し、裏でバックグラウンド更新する。
+# これによりボタン押下のレスポンスは常に <500ms、次回押下で最新値を取得できる。
+STALE_GRACE_MULTIPLIER = 2  # 総キャッシュ寿命 = TTL × 2
+
+# 多重バックグラウンド取得を抑止
+_refresh_in_flight: set = set()
+_refresh_lock = threading.Lock()
+
+def _trigger_background_refresh(ticker: str):
+    with _refresh_lock:
+        if ticker in _refresh_in_flight:
+            return
+        _refresh_in_flight.add(ticker)
+    def worker():
+        try:
+            if is_fund_ticker(ticker):
+                fund_code = ticker[:-2]
+                data = get_fund_price_yfjp(fund_code)
+            else:
+                data = fetch_price_with_retry(ticker)
+            _store_price(ticker, data)
+            logging.info(f'SWR  {ticker}: refreshed in background')
+        except Exception as e:
+            logging.warning(f'SWR  {ticker} refresh failed: {e}')
+        finally:
+            with _refresh_lock:
+                _refresh_in_flight.discard(ticker)
+    threading.Thread(target=worker, daemon=True).start()
+
 def _cached_price(ticker: str):
+    """SWR 対応キャッシュ取得。
+    - age < TTL:        フレッシュ → そのまま返す
+    - TTL ≤ age < 2×TTL: stale → 即返しつつ裏で更新
+    - 2×TTL ≤ age:      None（呼び出し側でフレッシュ取得）
+    """
     entry = _price_cache.get(ticker)
     if not entry:
         return None
     age = time.time() - entry['ts']
-    if age >= _get_price_ttl(ticker):
-        return None
-    # cache_age_sec を付与してクライアントに返す（フレッシュ取得との区別用）
-    return {**entry['data'], 'cache_age_sec': round(age, 1)}
-
-def _store_price(ticker: str, data: dict):
-    # cache_age_sec はキャッシュ自体には保存しない（_cached_price で都度計算）
-    clean = {k: v for k, v in data.items() if k != 'cache_age_sec'}
-    _price_cache[ticker] = {'data': clean, 'ts': time.time()}
+    ttl = _get_price_ttl(ticker)
+    if age < ttl:
+        return {**entry['data'], 'cache_age_sec': round(age, 1)}
+    if age < ttl * STALE_GRACE_MULTIPLIER:
+        _trigger_background_refresh(ticker)
+        return {**entry['data'], 'cache_age_sec': round(age, 1), 'stale': True}
+    return None
 
 def _cached_hist(ticker: str, period: str):
     entry = _hist_cache.get((ticker, period))
@@ -1751,4 +1789,4 @@ if __name__ == '__main__':
     if not no_open:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
