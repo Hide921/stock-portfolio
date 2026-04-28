@@ -1591,10 +1591,11 @@ async function fetchAllPrices() {
     const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
     const priceMap   = {};
 
-    // ── Step1: Renderに全銘柄を1回のバッチリクエスト（最速）──
-    if (API_BASE) {
+    // ── Step1: バックエンドに全銘柄を1回のバッチリクエスト（最速）──
+    // API_BASE が空文字 (localhost) でも相対パスで動くので常にトライする
+    if (typeof API_BASE === 'string') {
       try {
-        await wakeRender(); // スリープ中のRenderが起動するまで待機（最大65秒）
+        if (API_BASE) await wakeRender(); // スリープ中のRenderが起動するまで待機（最大65秒）
         const res = await fetch(
           `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
           { signal: AbortSignal.timeout(30000), cache: 'no-store' }
@@ -1608,7 +1609,7 @@ async function fetchAllPrices() {
             const price = isFundTicker(t) ? d.price / 10000 : d.price;
             const prev  = isFundTicker(t) && d.prev_close != null ? d.prev_close / 10000 : d.prev_close;
             const dayCh = isFundTicker(t) && d.day_change != null ? d.day_change / 10000 : d.day_change;
-            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY', nav_date: d.nav_date ?? null };
+            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY', nav_date: d.nav_date ?? null, cache_age_sec: d.cache_age_sec ?? null };
           });
         }
       } catch(e) {}
@@ -1707,6 +1708,15 @@ async function fetchAllPrices() {
 
     if (logChanged && updated > 0) sbSave(true); // 当日ログが更新されたら即同期
 
+    // サーバキャッシュ年齢を集計（cache_age_sec が付いていればキャッシュ応答）
+    const cacheAges = Object.values(priceMap)
+      .map(d => d?.cache_age_sec)
+      .filter(a => Number.isFinite(a));
+    const maxCacheAge = cacheAges.length ? Math.max(...cacheAges) : 0;
+    const ageLabel = maxCacheAge >= 60
+      ? `${Math.round(maxCacheAge/60)}分前`
+      : `${Math.round(maxCacheAge)}秒前`;
+
     // トースト: 「実際に価格が変動した件数」を反映
     let toastMsg, toastType;
     if (failed > 0) {
@@ -1716,7 +1726,9 @@ async function fetchAllPrices() {
       toastMsg = '価格を更新できませんでした';
       toastType = 'error';
     } else if (changed === 0) {
-      toastMsg = `価格に変動なし（${unchanged}件、サーバキャッシュ）`;
+      toastMsg = cacheAges.length
+        ? `価格に変動なし（${unchanged}件・サーバキャッシュ ${ageLabel}）`
+        : `価格に変動なし（${unchanged}件）`;
       toastType = 'success';
     } else if (unchanged > 0) {
       toastMsg = `${changed}件更新（${unchanged}件変動なし）`;
