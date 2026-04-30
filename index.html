@@ -545,11 +545,16 @@
       </p>
       <div class="import-format-hint">
         <strong>自動認識する列名の例:</strong><br>
-        ティッカー/銘柄コード/証券コード &nbsp;・&nbsp; 銘柄名/会社名 &nbsp;・&nbsp; 保有数量/株数/口数 &nbsp;・&nbsp; 平均取得単価/取得単価<br>
-        時価・簿価・損益・増減率などの計算列は自動スキップされます。
+        ティッカー/銘柄コード &nbsp;・&nbsp; 銘柄名 &nbsp;・&nbsp; 市場 &nbsp;・&nbsp; 取引種別 &nbsp;・&nbsp; 保有数量/株数/口数 &nbsp;・&nbsp; 平均取得単価/平均取得価格 &nbsp;・&nbsp; 取得時通貨 &nbsp;・&nbsp; 現在価格 &nbsp;・&nbsp; メモ<br>
+        評価額・損益・損益率・最終取得日時などの計算列は自動スキップされます。<br>
+        <strong>📤 エクスポートしたCSVをそのまま貼り付ければ完全復元できます。</strong>
       </div>
       <textarea class="import-textarea" id="importTextarea"
         placeholder="ここにスプレッドシートのデータを貼り付け...&#10;&#10;例)&#10;銘柄コード&#9;銘柄名&#9;保有数量&#9;平均取得単価&#10;7203&#9;トヨタ自動車&#9;100&#9;2850&#10;AAPL&#9;Apple Inc.&#9;30&#9;175"></textarea>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--text-muted);cursor:pointer;">
+        <input type="checkbox" id="importReplaceMode" style="cursor:pointer;">
+        <span>既存データを置き換えて完全復元する（現在の銘柄をすべて削除）</span>
+      </label>
       <div class="modal-actions">
         <button class="btn-ghost" onclick="closeImportModal()">キャンセル</button>
         <button class="btn-primary" onclick="parseImportData()">プレビュー →</button>
@@ -2249,14 +2254,26 @@ function deleteStock(id) {
 // ── インポート ────────────────────────────────────────────────────
 let importRows = [];
 
+// 注: detectImportColumns は substring 一致で先勝ちなので、より具体的なキーワードを先に置く
+// （例: '取得時通貨' を '取得' より先に判定するため avgCurrency を avgPrice より上に置く）
 const IMPORT_KEYWORDS = {
-  ticker:    ['ティッカー', 'ticker', '銘柄コード', '証券コード', 'シンボル', 'コード'],
-  name:      ['銘柄名', '会社名', '名称', 'name'],
-  quantity:  ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
-  avgPrice:  ['平均取得単価', '取得単価', '平均単価', '取得価格', '平均コスト', '平均取得', '取得'],
-  sector:    ['セクター', '業種', 'sector'],
-  tradeType: ['取引種別', 'trade type', '種別'],
-  note:      ['メモ', '備考', 'note', '注記', 'コメント'],
+  ticker:      ['ティッカー', 'ticker', '銘柄コード', '証券コード', 'シンボル'],
+  name:        ['銘柄名', '会社名', '名称', 'name'],
+  market:      ['市場', 'market'],
+  tradeType:   ['取引種別', 'trade type', '種別'],
+  sector:      ['セクター', '業種', 'sector'],
+  quantity:    ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
+  avgCurrency: ['取得時通貨', '取得通貨', 'avg currency'],
+  avgPrice:    ['平均取得単価', '平均取得価格', '取得単価', '取得価格', '平均単価', '平均コスト', '平均取得'],
+  currentPrice:['現在価格', '現在値', 'current price'],
+  currency:    ['通貨', 'currency'],
+  note:        ['メモ', '備考', 'note', '注記', 'コメント'],
+};
+
+// エクスポートで出力する市場ラベル ↔ 内部コードの相互変換
+const MARKET_LABEL_TO_CODE = {
+  '日本株': 'JP', '米国株': 'US', '投資信託': 'FUND', '暗号資産': 'CRYPTO',
+  'JP': 'JP',     'US': 'US',     'FUND': 'FUND',     'CRYPTO': 'CRYPTO',
 };
 
 // CSV行パーサ (クォート対応)
@@ -2292,13 +2309,20 @@ function showImportStep(n) {
 }
 
 function detectImportColumns(headers) {
+  // 列ごとに「未消費のヘッダー」から最初に一致するものを割り当てる。
+  // IMPORT_KEYWORDS 内の列順がそのまま優先順となる
+  // （例: avgCurrency を currency より先に置くことで、'取得時通貨' が '通貨' より先に消費される）
   const map = {};
+  const consumed = new Set();
   Object.keys(IMPORT_KEYWORDS).forEach(k => (map[k] = -1));
-  headers.forEach((h, i) => {
-    const lower = h.toLowerCase().trim();
-    for (const [col, kws] of Object.entries(IMPORT_KEYWORDS)) {
-      if (map[col] === -1 && kws.some(kw => lower.includes(kw.toLowerCase()))) {
+  Object.entries(IMPORT_KEYWORDS).forEach(([col, kws]) => {
+    for (let i = 0; i < headers.length; i++) {
+      if (consumed.has(i)) continue;
+      const lower = String(headers[i] || '').toLowerCase().trim();
+      if (kws.some(kw => lower.includes(kw.toLowerCase()))) {
         map[col] = i;
+        consumed.add(i);
+        break;
       }
     }
   });
@@ -2346,17 +2370,28 @@ function parseImportData() {
     const ticker = (cells[colMap.ticker] || '').trim().toUpperCase().replace(/\s/g, '');
     if (!ticker) continue;
 
-    const market         = detectMarketFromTicker(ticker);
-    const qty            = colMap.quantity  >= 0 ? parseNum(cells[colMap.quantity])          : 0;
-    const avg            = colMap.avgPrice  >= 0 ? parseNum(cells[colMap.avgPrice])          : 0;
-    const name           = colMap.name      >= 0 ? (cells[colMap.name]      || '').trim()    : '';
-    const sector         = colMap.sector    >= 0 ? (cells[colMap.sector]    || '').trim()    : '';
-    const note           = colMap.note      >= 0 ? (cells[colMap.note]      || '').trim()    : '';
-    const tradeTypeRaw   = colMap.tradeType >= 0 ? (cells[colMap.tradeType] || '').trim()    : '';
-    const tradeType      = tradeTypeRaw === '信用買い' ? 'margin' : 'spot';
-    const duplicate      = stocks.some(s => s.ticker === ticker && s.tradeType === tradeType);
+    // 市場列があれば優先（ラベル↔コードの相互変換）。なければティッカーから推測
+    let market = '';
+    if (colMap.market >= 0) {
+      const raw = (cells[colMap.market] || '').trim();
+      market = MARKET_LABEL_TO_CODE[raw] || MARKET_LABEL_TO_CODE[raw.toUpperCase()] || '';
+    }
+    if (!market) market = detectMarketFromTicker(ticker);
 
-    importRows.push({ ticker, name, market, tradeType, sector, note, quantity: qty, avgPrice: avg, duplicate });
+    const qty            = colMap.quantity     >= 0 ? parseNum(cells[colMap.quantity])     : 0;
+    const avg            = colMap.avgPrice     >= 0 ? parseNum(cells[colMap.avgPrice])     : 0;
+    const cur            = colMap.currentPrice >= 0 ? parseNum(cells[colMap.currentPrice]) : 0;
+    const name           = colMap.name         >= 0 ? (cells[colMap.name]    || '').trim() : '';
+    const sector         = colMap.sector       >= 0 ? (cells[colMap.sector]  || '').trim() : '';
+    const note           = colMap.note         >= 0 ? (cells[colMap.note]    || '').trim() : '';
+    const tradeTypeRaw   = colMap.tradeType    >= 0 ? (cells[colMap.tradeType] || '').trim() : '';
+    const tradeType      = tradeTypeRaw === '信用買い' ? 'margin' : 'spot';
+    // 取得時通貨: 暗号資産で円建て買付などのケースを復元するために必要
+    const avgCurRaw      = colMap.avgCurrency  >= 0 ? (cells[colMap.avgCurrency] || '').trim().toUpperCase() : '';
+    const avgCurrency    = (avgCurRaw === 'JPY' || avgCurRaw === 'USD') ? avgCurRaw : '';
+    const duplicate      = stocks.some(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType);
+
+    importRows.push({ ticker, name, market, tradeType, sector, note, quantity: qty, avgPrice: avg, currentPrice: cur, avgCurrency, duplicate });
   }
 
   if (!importRows.length) { toast('有効なデータ行が見つかりません', 'error'); return; }
@@ -2366,7 +2401,11 @@ function parseImportData() {
 }
 
 function renderImportPreview(headers, colMap) {
-  const LABELS   = { ticker: 'ティッカー', name: '銘柄名', quantity: '保有数量', avgPrice: '平均取得単価', sector: 'セクター', tradeType: '取引種別', note: 'メモ' };
+  const LABELS   = {
+    ticker: 'ティッカー', name: '銘柄名', market: '市場', tradeType: '取引種別',
+    sector: 'セクター', quantity: '保有数量', avgPrice: '平均取得単価',
+    avgCurrency: '取得時通貨', currentPrice: '現在価格', note: 'メモ',
+  };
   const REQUIRED = new Set(['ticker']);
 
   document.getElementById('importColMap').innerHTML = Object.entries(LABELS).map(([k, label]) => {
@@ -2377,30 +2416,41 @@ function renderImportPreview(headers, colMap) {
     return `<span class="col-tag ${cls}">${icon} ${esc(label)}${col}</span>`;
   }).join('');
 
-  const newCount  = importRows.filter(r => !r.duplicate).length;
-  const skipCount = importRows.filter(r =>  r.duplicate).length;
+  const replaceMode = document.getElementById('importReplaceMode')?.checked;
+  const newCount  = replaceMode ? importRows.length : importRows.filter(r => !r.duplicate).length;
+  const skipCount = replaceMode ? 0                  : importRows.filter(r =>  r.duplicate).length;
   document.getElementById('importSummary').innerHTML =
-    `<strong>${importRows.length}</strong> 件検出 — 新規追加: <strong>${newCount}</strong> 件` +
-    (skipCount ? `、既存スキップ: <strong>${skipCount}</strong> 件` : '');
+    (replaceMode ? `<strong style="color:var(--red)">⚠ 置換モード:</strong> 現在の銘柄をすべて削除してから ` : '') +
+    `<strong>${importRows.length}</strong> 件検出 — ` +
+    (replaceMode ? `復元: <strong>${newCount}</strong> 件` : `新規追加: <strong>${newCount}</strong> 件` +
+    (skipCount ? `、既存スキップ: <strong>${skipCount}</strong> 件` : ''));
 
   const tradeLabel = { spot: '現物', margin: '信用買い' };
   document.getElementById('importPreviewTable').innerHTML =
     `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>取引種別</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
     `<tbody>` + importRows.map((r, i) => {
+      // 置換モードでは duplicate を無視して全行を取り込む
+      const skipped = !replaceMode && r.duplicate;
       const nameCell = r.name
         ? esc(r.name)
-        : r.duplicate
+        : skipped
           ? esc(stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType)?.name || '—')
           : `<span class="importing-name">取得中...</span>`;
+      const stateLabel = replaceMode
+        ? '✓ 復元'
+        : (r.duplicate ? '⚠ 既存' : '✓ 新規');
+      const stateCls = replaceMode
+        ? 'badge-new'
+        : (r.duplicate ? 'badge-skip' : 'badge-new');
       return `
-      <tr class="${r.duplicate ? 'skip' : ''}">
+      <tr class="${skipped ? 'skip' : ''}">
         <td>${esc(r.ticker)}</td>
         <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
         <td>${esc(r.market)}</td>
         <td>${esc(tradeLabel[r.tradeType] || r.tradeType)}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
         <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
-        <td class="${r.duplicate ? 'badge-skip' : 'badge-new'}">${r.duplicate ? '⚠ 既存' : '✓ 新規'}</td>
+        <td class="${stateCls}">${stateLabel}</td>
       </tr>`;
     }).join('') + `</tbody>`;
 
@@ -2409,9 +2459,11 @@ function renderImportPreview(headers, colMap) {
 }
 
 async function fetchImportNames() {
+  // 置換モードでは duplicate も取り込まれるので、name 未取得の全行を対象にする
+  const replaceMode = document.getElementById('importReplaceMode')?.checked;
   const pending = importRows
     .map((r, i) => ({ r, i }))
-    .filter(({ r }) => !r.name && !r.duplicate);
+    .filter(({ r }) => !r.name && (replaceMode || !r.duplicate));
 
   if (!pending.length) return;
 
@@ -2438,31 +2490,48 @@ async function fetchImportNames() {
 }
 
 function executeImport() {
-  const toAdd = importRows.filter(r => !r.duplicate);
+  const replaceMode = document.getElementById('importReplaceMode')?.checked;
+  // 置換モードでは duplicate を無視して全行を取り込む
+  const toAdd = replaceMode ? importRows : importRows.filter(r => !r.duplicate);
   if (!toAdd.length) { toast('追加できる銘柄がありません', 'error'); return; }
+
+  if (replaceMode && stocks.length > 0) {
+    if (!confirm(`現在の ${stocks.length} 件の銘柄をすべて削除して、CSV の ${toAdd.length} 件で置き換えます。よろしいですか？`)) return;
+    stocks = [];
+  }
 
   toAdd.forEach(r => {
     const yahooTicker = getYahooTicker(r.ticker, r.market);
     const currency    = getCurrency(r.market);
+    // 取得時通貨: CSV にあればそれを優先、なければ currency と同一
+    const avgCurrency = r.avgCurrency || currency;
+    // 現在価格: CSV にあれば復元（再取得までの暫定値）、なければ avgPrice で初期化
+    const initPrice   = r.currentPrice > 0 ? r.currentPrice : r.avgPrice;
     stocks.push({
       id: uid(), ticker: r.ticker, yahooTicker, name: r.name,
-      market: r.market, tradeType: r.tradeType || 'spot', sector: r.sector, currency,
+      market: r.market, tradeType: r.tradeType || 'spot', sector: r.sector,
+      currency, avgCurrency,
       quantity: r.quantity, avgPrice: r.avgPrice,
-      currentPrice: r.avgPrice, prevClose: r.avgPrice, dayChange: 0,
+      currentPrice: initPrice, prevClose: initPrice, dayChange: 0,
       note: r.note, lastFetched: null, fetchError: null, _perKuchi: true,
     });
   });
 
   save(); render(); renderPieChart();
   document.getElementById('importOverlay').classList.remove('open');
-  toast(`${toAdd.length} 件をインポートしました`, 'success');
+  toast(`${toAdd.length} 件を${replaceMode ? '復元' : 'インポート'}しました`, 'success');
+  // インポート後は最新価格を取得
+  setTimeout(fetchAllPrices, 200);
 }
 
 // ── エクスポート ──────────────────────────────────────────────────
+// 列構成は import が完全復元できるよう設計されている:
+// - 「市場」「取得時通貨」「現在価格」も import 側で読み取り可能
+// - 評価額/含み損益/損益率/最終取得日時 は計算列（import では無視）
 function exportCSV() {
   const headers = [
     'ティッカー','銘柄名','市場','取引種別','セクター',
-    '保有数量','平均取得価格','現在価格','通貨',
+    '保有数量','平均取得単価','現在価格','通貨','取得時通貨',
     '評価額(円換算)','含み損益(円換算)','損益率(%)',
     '最終取得日時','メモ',
   ];
@@ -2487,6 +2556,7 @@ function exportCSV() {
       s.avgPrice,
       s.currentPrice,
       s.currency,
+      s.avgCurrency || s.currency,
       Math.round(valueJPY),
       Math.round(plJPY),
       plPct.toFixed(2),
