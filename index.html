@@ -378,6 +378,10 @@
           <button class="period-btn" data-period="1y"  onclick="fetchHistory('1y')">1年</button>
         </div>
       </div>
+      <div class="period-btns" style="margin-top:6px">
+        <button class="period-btn active" data-series="total" onclick="setLineSeries('total')">総資産</button>
+        <button class="period-btn" data-series="spot" onclick="setLineSeries('spot')">現物</button>
+      </div>
       <div class="line-stats" id="lineStats" style="display:none">
         <div class="line-stat">期間損益: <strong id="linePL">—</strong></div>
         <div class="line-stat">期間変化率: <strong id="linePLPct">—</strong></div>
@@ -979,6 +983,7 @@ let filterTradeType  = '';
 let autoRateEnabled  = false;
 let autoRateInterval = null;
 let currentPeriod    = '1mo';
+let currentSeries    = 'total'; // 'total' | 'spot'
 let pieChart         = null;
 let lineChart        = null;
 let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
@@ -1031,14 +1036,35 @@ function calcSpotTotalJPY() {
     .reduce((sum, s) => sum + toJPY(s.currentPrice * s.quantity, s.currency), 0);
 }
 
+function calcCollateralSumJPY() {
+  return (collateralEntries || []).reduce(
+    (sum, e) => sum + toJPY(Number(e.amount) || 0, e.currency || 'JPY'), 0);
+}
+
+function calcMarginPLJPY() {
+  return stocks
+    .filter(s => s.tradeType === 'margin' && s.currentPrice)
+    .reduce((sum, s) => sum + toJPY(s.currentPrice * s.quantity, s.currency) - getCostJPY(s), 0);
+}
+
+// 総資産 = 現物評価額 + 担保金 + 信用含み損益
+function calcGrandTotalJPY() {
+  return calcSpotTotalJPY() + calcCollateralSumJPY() + calcMarginPLJPY();
+}
+
 function recordDailyLog() {
-  const value = Math.round(calcSpotTotalJPY());
-  if (!value) return false;
+  const spot = Math.round(calcSpotTotalJPY());
+  if (!spot) return false; // 価格未取得時はスキップ
+  const total = Math.round(calcGrandTotalJPY());
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
   const idx = portfolioLog.findIndex(e => e.date === today);
-  if (idx >= 0 && portfolioLog[idx].value === value) return false;
-  if (idx >= 0) portfolioLog[idx].value = value;
-  else portfolioLog.push({ date: today, value });
+  if (idx >= 0 && portfolioLog[idx].value === spot && portfolioLog[idx].total === total) return false;
+  if (idx >= 0) {
+    portfolioLog[idx].value = spot;
+    portfolioLog[idx].total = total;
+  } else {
+    portfolioLog.push({ date: today, value: spot, total });
+  }
   portfolioLog.sort((a, b) => a.date.localeCompare(b.date));
   if (portfolioLog.length > 730) portfolioLog = portfolioLog.slice(-730); // 2年分保持
   return true;
@@ -1046,11 +1072,17 @@ function recordDailyLog() {
 
 function mergePortfolioLogs(localLog, cloudLog) {
   const merged = new Map();
-  normalizePortfolioLog(localLog).forEach(e => merged.set(e.date, e.value));
-  normalizePortfolioLog(cloudLog).forEach(e => merged.set(e.date, e.value));
-  return [...merged.entries()]
-    .map(([date, value]) => ({ date, value }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const apply = e => {
+    const prev = merged.get(e.date);
+    const next = { date: e.date, value: e.value };
+    // total は新しい側の値を優先しつつ、無ければ既存値を維持
+    if (e.total != null) next.total = e.total;
+    else if (prev?.total != null) next.total = prev.total;
+    merged.set(e.date, next);
+  };
+  normalizePortfolioLog(localLog).forEach(apply);
+  normalizePortfolioLog(cloudLog).forEach(apply);
+  return [...merged.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function periodCutoffDate(period) {
@@ -1063,7 +1095,14 @@ function periodCutoffDate(period) {
 function normalizePortfolioLog(log) {
   if (!Array.isArray(log)) return [];
   return log
-    .map(e => ({ date: String(e?.date || '').slice(0, 10), value: Number(e?.value) }))
+    .map(e => {
+      const date  = String(e?.date || '').slice(0, 10);
+      const value = Number(e?.value);
+      const total = Number(e?.total);
+      const out = { date, value };
+      if (Number.isFinite(total)) out.total = total;
+      return out;
+    })
     .filter(e => /^\d{4}-\d{2}-\d{2}$/.test(e.date) && Number.isFinite(e.value) && e.value > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -1404,8 +1443,8 @@ function updateSyncIcon(state) {
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
-if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
+if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
 renderCollateral();
 
 // ── Render ウォームアップ（スリープ対策）───────────────────────
@@ -1795,8 +1834,15 @@ async function fetchAllPrices() {
 // ── 期間ボタン（同期・即時） ─────────────────────────────────────
 function fetchHistory(period) {
   currentPeriod = period;
-  document.querySelectorAll('.period-btn').forEach(b =>
+  document.querySelectorAll('.period-btn[data-period]').forEach(b =>
     b.classList.toggle('active', b.dataset.period === period));
+  renderLineChart();
+}
+
+function setLineSeries(series) {
+  currentSeries = series === 'spot' ? 'spot' : 'total';
+  document.querySelectorAll('.period-btn[data-series]').forEach(b =>
+    b.classList.toggle('active', b.dataset.series === currentSeries));
   renderLineChart();
 }
 
@@ -1807,18 +1853,31 @@ function renderLineChart() {
   const statsEl     = document.getElementById('lineStats');
   const logInfoEl   = document.getElementById('lineLogInfo');
 
-  const cutoff = periodCutoffDate(currentPeriod);
+  const cutoff   = periodCutoffDate(currentPeriod);
+  // 総資産モードでは total フィールドがある日のみ採用（古い記録は現物のみなのでスキップ）
+  // フォールバック: total が無く value のみの日は、信用・担保金が無い前提で value=total とみなす
+  const pickValue = e =>
+    currentSeries === 'total'
+      ? (e.total != null ? e.total : null)
+      : e.value;
   const points = portfolioLog
-    .filter(e => e.date >= cutoff && e.value > 0)
-    .map(e => ({ date: e.date, value: e.value }));
+    .filter(e => e.date >= cutoff)
+    .map(e => ({ date: e.date, value: pickValue(e) }))
+    .filter(p => p.value != null && p.value !== 0);
 
   const totalLogDays = portfolioLog.length;
+  const totalSeriesDays = currentSeries === 'total'
+    ? portfolioLog.filter(e => e.total != null).length
+    : totalLogDays;
   if (!totalLogDays) {
     logInfoEl.textContent = '実績ログ: 0日';
+  } else if (currentSeries === 'total' && totalSeriesDays === 0) {
+    logInfoEl.textContent = `実績ログ: ${totalLogDays}日 / 総資産記録なし（次回取得から蓄積）`;
   } else {
     const firstDay = portfolioLog[0].date;
     const lastDay = portfolioLog[totalLogDays - 1].date;
-    logInfoEl.textContent = `実績ログ: ${totalLogDays}日 (${firstDay}〜${lastDay}) / 表示期間: ${points.length}日`;
+    const seriesLabel = currentSeries === 'total' ? '総資産' : '現物';
+    logInfoEl.textContent = `実績ログ: ${totalLogDays}日 (${firstDay}〜${lastDay}) / ${seriesLabel}: ${totalSeriesDays}日 / 表示期間: ${points.length}日`;
   }
 
   if (points.length < 2) {
@@ -2004,11 +2063,16 @@ function render() {
   }
   document.getElementById('collateralHeaderSum').textContent = '合計: ' + fmtJPY(collateralSum);
 
-  // 総資産カード（株式＋担保金）
-  const grandTotal = totalValueJPY + collateralSum;
+  // 総資産カード（現物株式＋担保金＋信用損益）
+  // 信用建玉の評価額そのものは借入分を含むため、純資産への寄与は含み損益(marginPL)のみ。
+  const grandTotal = totalValueJPY + collateralSum + marginPL;
   document.getElementById('totalValue').textContent = fmtJPY(grandTotal);
-  document.getElementById('totalCost').textContent  = hasCollateral
-    ? `株式: ${fmtJPY(totalValueJPY)} | 担保金: ${fmtJPY(collateralSum)}`
+  document.getElementById('totalCost').textContent  = (hasCollateral || hasMargin)
+    ? [
+        `株式: ${fmtJPY(totalValueJPY)}`,
+        hasCollateral ? `担保金: ${fmtJPY(collateralSum)}` : null,
+        hasMargin ? `信用損益: ${marginPL >= 0 ? '+' : '-'}${fmtJPY(marginPL)}` : null,
+      ].filter(Boolean).join(' | ')
     : `取得総額: ${fmtJPY(totalCostJPY)}`;
   const plEl = document.getElementById('totalPL');
   plEl.textContent = (totalPL >= 0 ? '+' : '-') + fmtJPY(totalPL);
