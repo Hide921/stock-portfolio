@@ -1895,7 +1895,7 @@ function renderLineChart() {
 
   statsEl.style.display = 'flex';
   const plEl  = document.getElementById('linePL');
-  plEl.textContent = (diff >= 0 ? '+' : '') + (diff >= 0 ? '' : '-') + fmtJPY(diff);
+  plEl.textContent = (diff >= 0 ? '▲' : '▼') + fmtJPY(diff);
   plEl.style.color = color;
   const pctEl = document.getElementById('linePLPct');
   pctEl.textContent = pctStr(pct);
@@ -2075,7 +2075,7 @@ function render() {
       ].filter(Boolean).join(' | ')
     : `取得総額: ${fmtJPY(totalCostJPY)}`;
   const plEl = document.getElementById('totalPL');
-  plEl.textContent = (totalPL >= 0 ? '+' : '-') + fmtJPY(totalPL);
+  plEl.textContent = (totalPL >= 0 ? '▲' : '▼') + fmtJPY(totalPL);
   plEl.className   = 'card-value ' + plClass(totalPL);
   document.getElementById('totalPLPct').textContent  = pctStr(totalPLPct);
   document.getElementById('stockCount').textContent  = stocks.length;
@@ -2084,7 +2084,7 @@ function render() {
     ...(markets.CRYPTO ? [`暗号資産 ${markets.CRYPTO}`] : []),
   ].join(' | ');
   const dayEl = document.getElementById('dayPL');
-  dayEl.textContent = (allDayPLJPY >= 0 ? '+' : '-') + fmtJPY(allDayPLJPY);
+  dayEl.textContent = (allDayPLJPY >= 0 ? '▲' : '▼') + fmtJPY(allDayPLJPY);
   dayEl.className   = 'card-value ' + plClass(allDayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
 
@@ -2092,10 +2092,10 @@ function render() {
   document.getElementById('marginCard').style.display = hasMargin ? '' : 'none';
   if (hasMargin) {
     const mPlEl = document.getElementById('marginPL');
-    mPlEl.textContent = (marginPL >= 0 ? '+' : '-') + fmtJPY(marginPL);
+    mPlEl.textContent = (marginPL >= 0 ? '▲' : '▼') + fmtJPY(marginPL);
     mPlEl.className   = 'card-value ' + plClass(marginPL);
     document.getElementById('marginPLSub').textContent =
-      `${pctStr(marginPLPct)} | 本日: ${marginDayPLJPY >= 0 ? '+' : '-'}${fmtJPY(marginDayPLJPY)}`;
+      `${pctStr(marginPLPct)} | 本日: ${marginDayPLJPY >= 0 ? '▲' : '▼'}${fmtJPY(marginDayPLJPY)}`;
   }
 
   // テーブル行
