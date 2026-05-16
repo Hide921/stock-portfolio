@@ -85,7 +85,6 @@
     @media (max-width: 720px) { .pie-modal-body { grid-template-columns: 1fr; } }
     .pie-modal-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; }
     .pie-modal-legend .pie-legend-item { font-size: 12px; padding: 3px 0; }
-    .pie-modal-legend .pie-val { color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .pie-modal-legend .pie-pct { min-width: 48px; text-align: right; }
     .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
     .line-stat  { font-size: 12px; color: var(--text-muted); }
@@ -2055,7 +2054,6 @@ function openPieModal() {
     <div class="pie-legend-item">
       <div class="pie-dot" style="background:${colors[i]}"></div>
       <span class="pie-name" title="${esc(d.name)}">${esc(d.ticker)} ${esc(d.name)}</span>
-      <span class="pie-val">¥${Math.round(d.value).toLocaleString('ja-JP')}</span>
       <span class="pie-pct">${(d.value/total*100).toFixed(1)}%</span>
     </div>`).join('');
 }
