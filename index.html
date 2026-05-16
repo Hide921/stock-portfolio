@@ -90,6 +90,8 @@
     .pie-modal-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 2px 14px; }
     .pie-modal-legend .pie-legend-item { font-size: 12px; padding: 3px 0; }
     .pie-modal-legend .pie-pct { min-width: 44px; text-align: right; }
+    .pie-filters { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 16px; }
+    .pie-empty { color: var(--text-muted); font-size: 12px; padding: 20px 0; }
     .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
     .line-stat  { font-size: 12px; color: var(--text-muted); }
     .line-stat strong { color: var(--text); font-size: 14px; font-weight: 700; }
@@ -661,7 +663,21 @@
 
 <div class="overlay" id="pieOverlay" onclick="closePieModal(event)">
   <div class="modal pie-modal">
-    <h2>銘柄別配分 — 全<span id="pieModalCount">0</span>銘柄</h2>
+    <h2>銘柄別配分 — <span id="pieModalCount">0</span>銘柄</h2>
+    <div class="pie-filters">
+      <div class="period-btns" id="pieTradeFilter">
+        <button class="period-btn active" data-trade=""       onclick="setPieFilter('trade','')">現物+信用</button>
+        <button class="period-btn"        data-trade="spot"   onclick="setPieFilter('trade','spot')">現物のみ</button>
+        <button class="period-btn"        data-trade="margin" onclick="setPieFilter('trade','margin')">信用のみ</button>
+      </div>
+      <div class="period-btns" id="pieMarketFilter">
+        <button class="period-btn active" data-market=""       onclick="setPieFilter('market','')">全市場</button>
+        <button class="period-btn"        data-market="JP"     onclick="setPieFilter('market','JP')">日本株</button>
+        <button class="period-btn"        data-market="US"     onclick="setPieFilter('market','US')">米国株</button>
+        <button class="period-btn"        data-market="FUND"   onclick="setPieFilter('market','FUND')">投信</button>
+        <button class="period-btn"        data-market="CRYPTO" onclick="setPieFilter('market','CRYPTO')">暗号資産</button>
+      </div>
+    </div>
     <div class="pie-modal-body">
       <div class="pie-modal-chart">
         <canvas id="pieModalCanvas"></canvas>
@@ -2022,19 +2038,51 @@ function renderPieChart() {
     </div>`).join('');
 }
 
+let pieFilterMarket = '';
+let pieFilterTrade  = '';
+
 function openPieModal() {
   if (!stocks.length) { toast('銘柄が登録されていません', 'error'); return; }
+  pieFilterMarket = '';
+  pieFilterTrade  = '';
+  syncPieFilterButtons();
+  document.getElementById('pieOverlay').classList.add('open');
+  renderPieModal();
+}
 
+function setPieFilter(kind, value) {
+  if (kind === 'trade')  pieFilterTrade  = value;
+  if (kind === 'market') pieFilterMarket = value;
+  syncPieFilterButtons();
+  renderPieModal();
+}
+
+function syncPieFilterButtons() {
+  document.querySelectorAll('#pieTradeFilter .period-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.trade === pieFilterTrade));
+  document.querySelectorAll('#pieMarketFilter .period-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.market === pieFilterMarket));
+}
+
+function renderPieModal() {
   const data = stocks
+    .filter(s => (!pieFilterMarket || s.market    === pieFilterMarket)
+              && (!pieFilterTrade  || s.tradeType === pieFilterTrade))
     .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
     .sort((a, b) => b.value - a.value);
   const total  = data.reduce((s, d) => s + d.value, 0) || 1;
   const colors = data.map((_, i) => COLORS[i % COLORS.length]);
 
   document.getElementById('pieModalCount').textContent = data.length;
-  document.getElementById('pieOverlay').classList.add('open');
 
-  if (pieModalChart) pieModalChart.destroy();
+  if (pieModalChart) { pieModalChart.destroy(); pieModalChart = null; }
+
+  if (!data.length) {
+    document.getElementById('pieModalLegend').innerHTML =
+      '<div class="pie-empty">該当する銘柄がありません</div>';
+    return;
+  }
+
   pieModalChart = new Chart(document.getElementById('pieModalCanvas').getContext('2d'), {
     type: 'doughnut',
     data: {
