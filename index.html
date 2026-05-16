@@ -77,6 +77,16 @@
     .pie-dot  { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
     .pie-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pie-pct  { font-weight: 700; color: var(--text); }
+    .pie-card { cursor: pointer; transition: border-color 0.15s; }
+    .pie-card:hover { border-color: var(--accent); }
+    .expand-hint { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+    .pie-modal { width: 900px; }
+    .pie-modal-body { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+    @media (max-width: 720px) { .pie-modal-body { grid-template-columns: 1fr; } }
+    .pie-modal-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; }
+    .pie-modal-legend .pie-legend-item { font-size: 12px; padding: 3px 0; }
+    .pie-modal-legend .pie-val { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .pie-modal-legend .pie-pct { min-width: 48px; text-align: right; }
     .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
     .line-stat  { font-size: 12px; color: var(--text-muted); }
     .line-stat strong { color: var(--text); font-size: 14px; font-weight: 700; }
@@ -357,9 +367,10 @@
 
   <!-- Charts -->
   <div class="charts-section">
-    <div class="chart-card">
+    <div class="chart-card pie-card" onclick="openPieModal()" title="クリックで全銘柄を拡大表示">
       <div class="chart-header">
         <span class="chart-title">銘柄別配分</span>
+        <span class="expand-hint">⤢ 拡大</span>
       </div>
       <div style="height:180px">
         <canvas id="pieCanvas"></canvas>
@@ -641,6 +652,21 @@
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeCollateralModal()">キャンセル</button>
       <button class="btn-primary" onclick="saveCollateralEntry()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="pieOverlay" onclick="closePieModal(event)">
+  <div class="modal pie-modal">
+    <h2>銘柄別配分 — 全<span id="pieModalCount">0</span>銘柄</h2>
+    <div class="pie-modal-body">
+      <div style="height:320px">
+        <canvas id="pieModalCanvas"></canvas>
+      </div>
+      <div class="pie-modal-legend" id="pieModalLegend"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closePieModal()">閉じる</button>
     </div>
   </div>
 </div>
@@ -985,6 +1011,7 @@ let autoRateInterval = null;
 let currentPeriod    = '1mo';
 let currentSeries    = 'total'; // 'total' | 'spot'
 let pieChart         = null;
+let pieModalChart    = null;
 let lineChart        = null;
 let portfolioLog     = [];   // 日次ログ [{date:'2026-03-12', value:3799287}, ...]
 const PORTFOLIO_LOG_KEY = 'portfolio_log_v1';
@@ -1992,6 +2019,52 @@ function renderPieChart() {
     </div>`).join('');
 }
 
+function openPieModal() {
+  if (!stocks.length) { toast('銘柄が登録されていません', 'error'); return; }
+
+  const data = stocks
+    .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
+    .sort((a, b) => b.value - a.value);
+  const total  = data.reduce((s, d) => s + d.value, 0) || 1;
+  const colors = data.map((_, i) => COLORS[i % COLORS.length]);
+
+  document.getElementById('pieModalCount').textContent = data.length;
+  document.getElementById('pieOverlay').classList.add('open');
+
+  if (pieModalChart) pieModalChart.destroy();
+  pieModalChart = new Chart(document.getElementById('pieModalCanvas').getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: data.map(d => d.ticker),
+      datasets: [{ data: data.map(d => d.value), backgroundColor: colors, borderColor: '#1a1d27', borderWidth: 2, hoverOffset: 8 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '58%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1d27', borderColor: '#2e3148', borderWidth: 1,
+          titleColor: '#8b90a8', bodyColor: '#e8eaf0',
+          callbacks: { label: ctx => ` ¥${Math.round(ctx.raw).toLocaleString('ja-JP')} (${(ctx.raw/total*100).toFixed(1)}%)` },
+        },
+      },
+    },
+  });
+
+  document.getElementById('pieModalLegend').innerHTML = data.map((d, i) => `
+    <div class="pie-legend-item">
+      <div class="pie-dot" style="background:${colors[i]}"></div>
+      <span class="pie-name" title="${esc(d.name)}">${esc(d.ticker)} ${esc(d.name)}</span>
+      <span class="pie-val">¥${Math.round(d.value).toLocaleString('ja-JP')}</span>
+      <span class="pie-pct">${(d.value/total*100).toFixed(1)}%</span>
+    </div>`).join('');
+}
+
+function closePieModal(e) {
+  if (e && e.target !== document.getElementById('pieOverlay')) return;
+  document.getElementById('pieOverlay').classList.remove('open');
+}
+
 // ── テーブル & サマリー ────────────────────────────────────────────
 function render() {
   let list = stocks.filter(s => {
@@ -2192,6 +2265,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.getElementById('overlay').classList.remove('open');
     document.getElementById('syncOverlay')?.classList.remove('open');
+    document.getElementById('pieOverlay')?.classList.remove('open');
     editId = null;
   }
 });
