@@ -80,12 +80,16 @@
     .pie-card { cursor: pointer; transition: border-color 0.15s; }
     .pie-card:hover { border-color: var(--accent); }
     .expand-hint { font-size: 11px; color: var(--text-muted); font-weight: 600; }
-    .pie-modal { width: 900px; }
-    .pie-modal-body { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
-    @media (max-width: 720px) { .pie-modal-body { grid-template-columns: 1fr; } }
-    .pie-modal-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; }
+    .modal.pie-modal { width: 860px; }
+    .pie-modal-body { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
+    .pie-modal-chart { height: 260px; }
+    @media (max-width: 680px) {
+      .pie-modal-body { grid-template-columns: 1fr; }
+      .pie-modal-chart { height: 200px; }
+    }
+    .pie-modal-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 2px 14px; }
     .pie-modal-legend .pie-legend-item { font-size: 12px; padding: 3px 0; }
-    .pie-modal-legend .pie-pct { min-width: 48px; text-align: right; }
+    .pie-modal-legend .pie-pct { min-width: 44px; text-align: right; }
     .line-stats { display: flex; gap: 16px; margin-bottom: 8px; }
     .line-stat  { font-size: 12px; color: var(--text-muted); }
     .line-stat strong { color: var(--text); font-size: 14px; font-weight: 700; }
@@ -659,7 +663,7 @@
   <div class="modal pie-modal">
     <h2>銘柄別配分 — 全<span id="pieModalCount">0</span>銘柄</h2>
     <div class="pie-modal-body">
-      <div style="height:320px">
+      <div class="pie-modal-chart">
         <canvas id="pieModalCanvas"></canvas>
       </div>
       <div class="pie-modal-legend" id="pieModalLegend"></div>
