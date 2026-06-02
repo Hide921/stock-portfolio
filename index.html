@@ -134,6 +134,8 @@
     .badge-fund   { background: rgba(34,197,94,0.2);   color: var(--green); }
     .badge-crypto  { background: rgba(251,146,60,0.2);  color: #fb923c; }
     .badge-margin  { background: rgba(239,68,68,0.15);  color: #f87171; font-size: 9px; }
+    .badge-nisa     { background: rgba(20,184,166,0.18); color: #2dd4bf; font-size: 9px; }
+    .badge-specific { background: rgba(139,144,168,0.18); color: var(--text-muted); font-size: 9px; }
     .profit  { color: var(--green); font-weight: 600; }
     .loss    { color: var(--red);   font-weight: 600; }
     .neutral { color: var(--text-muted); }
@@ -513,6 +515,13 @@
         </select>
       </div>
       <div class="form-group">
+        <label>口座区分</label>
+        <select id="fAccountType">
+          <option value="specific">特定口座</option>
+          <option value="nisa">NISA</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label>ティッカー / 銘柄コード *</label>
         <input type="text" id="fTicker" placeholder="例: 7203" oninput="onTickerInput()">
         <span class="form-hint" id="tickerHint">証券コード4桁 (日本株)</span>
@@ -570,7 +579,7 @@
       </p>
       <div class="import-format-hint">
         <strong>自動認識する列名の例:</strong><br>
-        ティッカー/銘柄コード &nbsp;・&nbsp; 銘柄名 &nbsp;・&nbsp; 市場 &nbsp;・&nbsp; 取引種別 &nbsp;・&nbsp; 保有数量/株数/口数 &nbsp;・&nbsp; 平均取得単価/平均取得価格 &nbsp;・&nbsp; 取得時通貨 &nbsp;・&nbsp; 現在価格 &nbsp;・&nbsp; メモ<br>
+        ティッカー/銘柄コード &nbsp;・&nbsp; 銘柄名 &nbsp;・&nbsp; 市場 &nbsp;・&nbsp; 取引種別 &nbsp;・&nbsp; 口座区分 &nbsp;・&nbsp; 保有数量/株数/口数 &nbsp;・&nbsp; 平均取得単価/平均取得価格 &nbsp;・&nbsp; 取得時通貨 &nbsp;・&nbsp; 現在価格 &nbsp;・&nbsp; メモ<br>
         評価額・損益・損益率・最終取得日時などの計算列は自動スキップされます。<br>
         <strong>📤 エクスポートしたCSVをそのまま貼り付ければ完全復元できます。</strong>
       </div>
@@ -1188,6 +1197,7 @@ function migrateStock(s) {
   if (!('navDate'     in s)) s.navDate     = null;
   if (!('dayChange'  in s)) s.dayChange    = (s.prevClose != null && s.currentPrice != null) ? (s.currentPrice - s.prevClose) : null;
   if (!s.tradeType)          s.tradeType   = 'spot';
+  if (!s.accountType)        s.accountType = 'specific';
   // 万口単位 → 口単位 への一回限りのマイグレーション
   if (s.market === 'FUND' && !s._perKuchi) {
     s.quantity     = Math.round(s.quantity * 10000);
@@ -2267,7 +2277,7 @@ function render() {
       ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">基準日: ${esc(s.navDate)}</div>`
       : '';
     return `<tr>
-      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}</div>
+      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}${s.accountType==='nisa'?'<span class="badge badge-nisa">NISA</span>':'<span class="badge badge-specific">特定</span>'}</div>
           <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
       <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
       <td>${fmtPrice(s.avgPrice, avgCur)}</td>
@@ -2306,6 +2316,7 @@ function openModal(id = null) {
   document.getElementById('modalTitle').textContent = id ? '銘柄を編集' : '銘柄を追加';
   document.getElementById('fMarket').value     = s?.market     || 'JP';
   document.getElementById('fTradeType').value  = s?.tradeType  || 'spot';
+  document.getElementById('fAccountType').value = s?.accountType || 'specific';
   document.getElementById('fTicker').value     = s?.ticker     || '';
   document.getElementById('fName').value    = s?.name     || '';
   document.getElementById('fSector').value  = s?.sector   || '';
@@ -2412,6 +2423,7 @@ async function autoFetchName(ticker, market) {
 function saveStock() {
   const market     = document.getElementById('fMarket').value;
   const tradeType  = document.getElementById('fTradeType').value;
+  const accountType = document.getElementById('fAccountType').value;
   const ticker     = document.getElementById('fTicker').value.trim().toUpperCase();
   const name       = document.getElementById('fName').value.trim();
   const sector  = document.getElementById('fSector').value.trim();
@@ -2429,12 +2441,12 @@ function saveStock() {
 
   if (editId) {
     const idx = stocks.findIndex(s => s.id === editId);
-    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, note };
+    stocks[idx] = { ...stocks[idx], ticker, yahooTicker, name, market, tradeType, accountType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, note };
     toast('銘柄を更新しました', 'success');
   } else {
-    if (stocks.find(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
+    if (stocks.find(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType && s.accountType === accountType)) { toast(`${ticker} は既に登録されています`, 'error'); return; }
     const initPrice = avgCurrency !== currency ? null : avg;
-    stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, currentPrice: initPrice, prevClose: null, dayChange: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
+    stocks.push({ id: uid(), ticker, yahooTicker, name, market, tradeType, accountType, sector, currency, avgCurrency, quantity: qty, avgPrice: avg, currentPrice: initPrice, prevClose: null, dayChange: null, note, lastFetched: null, fetchError: null, _perKuchi: true });
     toast(`${ticker} を追加しました`, 'success');
   }
 
@@ -2463,6 +2475,7 @@ const IMPORT_KEYWORDS = {
   name:        ['銘柄名', '会社名', '名称', 'name'],
   market:      ['市場', 'market'],
   tradeType:   ['取引種別', 'trade type', '種別'],
+  accountType: ['口座区分', '口座種別', 'account'],
   sector:      ['セクター', '業種', 'sector'],
   quantity:    ['保有数量', '数量', '株数', '口数', '保有', 'quantity', 'qty'],
   avgCurrency: ['取得時通貨', '取得通貨', 'avg currency'],
@@ -2588,12 +2601,14 @@ function parseImportData() {
     const note           = colMap.note         >= 0 ? (cells[colMap.note]    || '').trim() : '';
     const tradeTypeRaw   = colMap.tradeType    >= 0 ? (cells[colMap.tradeType] || '').trim() : '';
     const tradeType      = tradeTypeRaw === '信用買い' ? 'margin' : 'spot';
+    const accountTypeRaw = colMap.accountType  >= 0 ? (cells[colMap.accountType] || '').trim().toUpperCase() : '';
+    const accountType    = accountTypeRaw === 'NISA' ? 'nisa' : 'specific';
     // 取得時通貨: 暗号資産で円建て買付などのケースを復元するために必要
     const avgCurRaw      = colMap.avgCurrency  >= 0 ? (cells[colMap.avgCurrency] || '').trim().toUpperCase() : '';
     const avgCurrency    = (avgCurRaw === 'JPY' || avgCurRaw === 'USD') ? avgCurRaw : '';
-    const duplicate      = stocks.some(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType);
+    const duplicate      = stocks.some(s => s.ticker === ticker && s.market === market && s.tradeType === tradeType && s.accountType === accountType);
 
-    importRows.push({ ticker, name, market, tradeType, sector, note, quantity: qty, avgPrice: avg, currentPrice: cur, avgCurrency, duplicate });
+    importRows.push({ ticker, name, market, tradeType, accountType, sector, note, quantity: qty, avgPrice: avg, currentPrice: cur, avgCurrency, duplicate });
   }
 
   if (!importRows.length) { toast('有効なデータ行が見つかりません', 'error'); return; }
@@ -2605,7 +2620,7 @@ function parseImportData() {
 function renderImportPreview(headers, colMap) {
   const LABELS   = {
     ticker: 'ティッカー', name: '銘柄名', market: '市場', tradeType: '取引種別',
-    sector: 'セクター', quantity: '保有数量', avgPrice: '平均取得単価',
+    accountType: '口座区分', sector: 'セクター', quantity: '保有数量', avgPrice: '平均取得単価',
     avgCurrency: '取得時通貨', currentPrice: '現在価格', note: 'メモ',
   };
   const REQUIRED = new Set(['ticker']);
@@ -2628,15 +2643,16 @@ function renderImportPreview(headers, colMap) {
     (skipCount ? `、既存スキップ: <strong>${skipCount}</strong> 件` : ''));
 
   const tradeLabel = { spot: '現物', margin: '信用買い' };
+  const accountLabel = { specific: '特定口座', nisa: 'NISA' };
   document.getElementById('importPreviewTable').innerHTML =
-    `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>取引種別</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
+    `<thead><tr><th>ティッカー</th><th>銘柄名</th><th>市場</th><th>取引種別</th><th>口座区分</th><th>保有数量</th><th>平均取得単価</th><th>状態</th></tr></thead>` +
     `<tbody>` + importRows.map((r, i) => {
       // 置換モードでは duplicate を無視して全行を取り込む
       const skipped = !replaceMode && r.duplicate;
       const nameCell = r.name
         ? esc(r.name)
         : skipped
-          ? esc(stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType)?.name || '—')
+          ? esc(stocks.find(s => s.ticker === r.ticker && s.tradeType === r.tradeType && s.accountType === r.accountType)?.name || '—')
           : `<span class="importing-name">取得中...</span>`;
       const stateLabel = replaceMode
         ? '✓ 復元'
@@ -2650,6 +2666,7 @@ function renderImportPreview(headers, colMap) {
         <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
         <td>${esc(r.market)}</td>
         <td>${esc(tradeLabel[r.tradeType] || r.tradeType)}</td>
+        <td>${esc(accountLabel[r.accountType] || r.accountType)}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
         <td>${r.avgPrice > 0 ? r.avgPrice.toLocaleString() : '—'}</td>
         <td class="${stateCls}">${stateLabel}</td>
@@ -2711,7 +2728,7 @@ function executeImport() {
     const initPrice   = r.currentPrice > 0 ? r.currentPrice : r.avgPrice;
     stocks.push({
       id: uid(), ticker: r.ticker, yahooTicker, name: r.name,
-      market: r.market, tradeType: r.tradeType || 'spot', sector: r.sector,
+      market: r.market, tradeType: r.tradeType || 'spot', accountType: r.accountType || 'specific', sector: r.sector,
       currency, avgCurrency,
       quantity: r.quantity, avgPrice: r.avgPrice,
       currentPrice: initPrice, prevClose: initPrice, dayChange: 0,
@@ -2732,13 +2749,14 @@ function executeImport() {
 // - 評価額/含み損益/損益率/最終取得日時 は計算列（import では無視）
 function exportCSV() {
   const headers = [
-    'ティッカー','銘柄名','市場','取引種別','セクター',
+    'ティッカー','銘柄名','市場','取引種別','口座区分','セクター',
     '保有数量','平均取得単価','現在価格','通貨','取得時通貨',
     '評価額(円換算)','含み損益(円換算)','損益率(%)',
     '最終取得日時','メモ',
   ];
 
   const tradeLabel = { spot:'現物', margin:'信用買い' };
+  const accountLabel = { specific:'特定口座', nisa:'NISA' };
   const marketLabel = { JP:'日本株', US:'米国株', FUND:'投資信託', CRYPTO:'暗号資産' };
 
   const rows = stocks.map(s => {
@@ -2753,6 +2771,7 @@ function exportCSV() {
       s.name,
       marketLabel[s.market] || s.market,
       tradeLabel[s.tradeType] || s.tradeType,
+      accountLabel[s.accountType] || s.accountType || '特定口座',
       s.sector || '',
       qty,
       s.avgPrice,
