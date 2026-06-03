@@ -1320,8 +1320,8 @@ def take_snapshot():
     all_tickers = tickers + ['USDJPY=X']
     prices: dict = {}
 
-    # Step 2a: v7 quote バッチ一括取得（投信以外）
-    batch_candidates = [t for t in all_tickers if not is_fund_ticker(t)]
+    # Step 2a: v7 quote バッチ一括取得（投信も含む。方式0と同一 API のため）
+    batch_candidates = list(all_tickers)
     try:
         prices.update(fetch_prices_batch(batch_candidates))
     except Exception as e:
@@ -1333,8 +1333,8 @@ def take_snapshot():
     jp_remain = [t for t in remaining if _classify_ticker(t) == 'jp']
     if us_remain or jp_remain:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
-            fut_us = outer.submit(_run_pool, us_remain, 3, 75, 30)
-            fut_jp = outer.submit(_run_pool, jp_remain, 3, 75, 30)
+            fut_us = outer.submit(_run_pool, us_remain, 6, 75, 30)
+            fut_jp = outer.submit(_run_pool, jp_remain, 5, 75, 30)
             ok_us, _err_us = fut_us.result()
             ok_jp, _err_jp = fut_jp.result()
         prices.update(ok_us)
@@ -1520,9 +1520,11 @@ def get_prices():
         else:
             uncached.append(t)
 
-    # ── Step 1: v7 quote API で米国株・日本株を一括取得 ──
-    # 投信（8桁.T）はバッチ API で取得できないため除外。
-    batch_candidates = [t for t in uncached if not is_fund_ticker(t)]
+    # ── Step 1: v7 quote API で米国株・日本株・投信を一括取得 ──
+    # 投信（8桁.T）も v7 quote で取得可能（投信個別取得の「方式0」と同一 API）。
+    # 1リクエストにまとめることで、投信ごとの遅い個別経路を回避する。
+    # バッチで取れなかった投信は Step 2 の個別経路（get_fund_price_yfjp）へフォールバック。
+    batch_candidates = list(uncached)
     if batch_candidates:
         try:
             batch_result = fetch_prices_batch(batch_candidates)
@@ -1540,8 +1542,8 @@ def get_prices():
 
     if us_tickers or jp_tickers:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
-            fut_us = outer.submit(_run_pool, us_tickers, 3, 60, 30)
-            fut_jp = outer.submit(_run_pool, jp_tickers, 3, 60, 30)
+            fut_us = outer.submit(_run_pool, us_tickers, 6, 60, 30)
+            fut_jp = outer.submit(_run_pool, jp_tickers, 5, 60, 30)
             ok_us, err_us = fut_us.result()
             ok_jp, err_jp = fut_jp.result()
         result.update(ok_us)
@@ -1551,20 +1553,35 @@ def get_prices():
         failed = {}
 
     # ── 部分失敗の自動リトライ（1回）──
-    # タイムアウトや 429 の一時的失敗は多くの場合 2秒待って再試行で救済できる
+    # タイムアウトや 429 の一時的失敗は再試行で救済できる。
+    # ・404（ティッカー不存在）は再試行しても無駄なので除外し、即エラー確定。
+    # ・固定待機は 429/レート制限を検知した時だけ。タイムアウト等は即再試行で時短。
     if failed:
-        retry_us = [t for t in failed if _classify_ticker(t) == 'us']
-        retry_jp = [t for t in failed if _classify_ticker(t) == 'jp']
-        logging.info(f'RETRY {len(failed)} tickers (US={len(retry_us)}, JP={len(retry_jp)})')
-        time.sleep(2)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
-            fut_us = outer.submit(_run_pool, retry_us, 2, 45, 25)
-            fut_jp = outer.submit(_run_pool, retry_jp, 2, 45, 25)
-            ok_us2, err_us2 = fut_us.result()
-            ok_jp2, err_jp2 = fut_jp.result()
-        result.update(ok_us2)
-        result.update(ok_jp2)
-        failed = {**err_us2, **err_jp2}
+        permanent = {t: m for t, m in failed.items() if '不存在' in (m or '')}
+        retryable = {t: m for t, m in failed.items() if t not in permanent}
+        if retryable:
+            retry_us = [t for t in retryable if _classify_ticker(t) == 'us']
+            retry_jp = [t for t in retryable if _classify_ticker(t) == 'jp']
+            rate_limited = any(
+                any(k in (m or '') for k in ('429', 'Too Many Requests', 'Rate'))
+                for m in retryable.values()
+            )
+            logging.info(
+                f'RETRY {len(retryable)} tickers (US={len(retry_us)}, JP={len(retry_jp)}, '
+                f'skip404={len(permanent)}, wait={rate_limited})'
+            )
+            if rate_limited:
+                time.sleep(2)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+                fut_us = outer.submit(_run_pool, retry_us, 4, 45, 25)
+                fut_jp = outer.submit(_run_pool, retry_jp, 4, 45, 25)
+                ok_us2, err_us2 = fut_us.result()
+                ok_jp2, err_jp2 = fut_jp.result()
+            result.update(ok_us2)
+            result.update(ok_jp2)
+            failed = {**err_us2, **err_jp2, **permanent}
+        else:
+            failed = permanent
 
     # 失敗したティッカーはエラー構造体で埋める
     for t, msg in failed.items():
