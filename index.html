@@ -1230,6 +1230,12 @@ function migrateStock(s) {
     if (s.dayChange != null) s.dayChange = s.dayChange / 10000;
     s._perKuchi = true;
   }
+  // 投信の市場区分の自己修復: 8桁協会コード(.T) なのに JP 等で登録されている
+  // 銘柄を FUND に矯正（日本株フィルタに投信が混入する不具合への対策）。
+  // 数量・価格は変更しない（既存データの数値を保持）。
+  if (s.market !== 'FUND' && isFundTicker(s.yahooTicker)) {
+    s.market = 'FUND';
+  }
   return s;
 }
 
@@ -2587,11 +2593,13 @@ function detectImportColumns(headers) {
 }
 
 function detectMarketFromTicker(ticker) {
-  if (/^\d{4,6}$/.test(ticker)) return 'JP';
-  if (/-USD$/i.test(ticker))    return 'CRYPTO';
-  if (/^[A-Z]{1,5}$/.test(ticker)) return 'US';
-  if (/^[0-9A-Z]{8}$/.test(ticker)) return 'FUND';
-  if (/^[A-Z]/.test(ticker)) return 'US';
+  if (/-USD$/i.test(ticker))         return 'CRYPTO';
+  if (/^[0-9A-Z]{8}$/.test(ticker))  return 'FUND';   // 投資信託: 8桁 協会コード (例 0131103C)
+  if (/^\d{7}$/.test(ticker))        return 'FUND';   // 投資信託: SBI 7桁内部コード (例 3311187)
+  if (/^\d{4}$/.test(ticker))        return 'JP';     // 日本株: 4桁証券コード
+  if (/^\d{1,3}[A-Z]$/.test(ticker)) return 'JP';     // 日本株: 新4桁英数字コード (例 130A)
+  if (/^[A-Z]{1,5}$/.test(ticker))   return 'US';
+  if (/^[A-Z]/.test(ticker))         return 'US';
   return 'JP';
 }
 
