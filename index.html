@@ -6,6 +6,13 @@
   <title>株式ポートフォリオ管理</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="apple-touch-icon" href="favicon.svg">
+  <!-- PWA: ホーム画面に追加・オフライン表示対応 -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Portfolio">
   <!-- 外部接続の事前確立で初回読み込みを短縮（TLS/DNSハンドシェイクを前倒し） -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://ugyashjjxoezvlnjtizw.supabase.co" crossorigin>
@@ -237,6 +244,9 @@
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast.success { border-color: var(--green); }
     .toast.error   { border-color: var(--red); }
+    .toast { display: flex; align-items: center; gap: 12px; }
+    .toast-action { background: transparent; border: 1px solid var(--accent); color: var(--accent-hover); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+    .toast-action:hover { background: var(--accent); color: #fff; }
 
     /* ── Spinner ── */
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -421,6 +431,8 @@
           <button class="period-btn" data-period="3mo" onclick="fetchHistory('3mo')">3ヶ月</button>
           <button class="period-btn" data-period="6mo" onclick="fetchHistory('6mo')">6ヶ月</button>
           <button class="period-btn" data-period="1y"  onclick="fetchHistory('1y')">1年</button>
+          <button class="period-btn" data-period="2y"  onclick="fetchHistory('2y')">2年</button>
+          <button class="period-btn" data-period="5y"  onclick="fetchHistory('5y')">5年</button>
         </div>
       </div>
       <div class="period-btns" style="margin-top:6px">
@@ -757,11 +769,6 @@ const CORS_PROXIES = [
   'https://api.allorigins.win/raw?url=',
   'https://api.codetabs.com/v1/proxy?quest=',
 ];
-// getHistoryViaCors 専用: Render /api/history と並列実行するため外部プロキシのみ
-const EXT_PROXIES = [
-  'https://api.allorigins.win/raw?url=',
-  'https://api.codetabs.com/v1/proxy?quest=',
-];
 let _proxyIdx = 0;
 const YF_CHART   = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 
@@ -984,60 +991,6 @@ async function getCurrentPrice(ticker) {
   return await getCurrentPriceViaCors(ticker);
 }
 
-async function getHistoryFund(ticker, period) {
-  try {
-    const res = await fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, {
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    // サーバーの履歴は 円/万口 なので ÷10,000 して 円/口 に変換
-    return (data[ticker] || []).map(d => ({ ...d, close: d.close / 10000 }));
-  } catch(e) {
-    // サーバーなし(GitHub Pages)の場合は現在価格の1点のみ返す (既に円/口)
-    try {
-      const d = await getCurrentPriceFundJS(ticker);
-      return [{ date: new Date().toISOString().slice(0, 10), close: d.price }];
-    } catch(e2) { return []; }
-  }
-}
-
-async function getHistoryViaCors(ticker, period) {
-  // Render /api/history と並列実行されるため、外部プロキシのみ使用（Render重複を避ける）
-  const raw = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1d&range=${period}`;
-  let lastErr;
-  for (let i = 0; i < EXT_PROXIES.length; i++) {
-    try {
-      const res  = await fetch(EXT_PROXIES[i] + encodeURIComponent(raw), { signal: AbortSignal.timeout(12000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      if (text.includes('Too Many Requests') || text.includes('Edge:')) throw new Error('proxy error');
-      const json = JSON.parse(text);
-      const result = json.chart?.result?.[0];
-      if (!result) throw new Error('データなし');
-      const ts     = result.timestamp || [];
-      const closes = result.indicators?.quote?.[0]?.close || [];
-      return ts
-        .map((t, idx) => ({ date: new Date(t * 1000).toISOString().slice(0, 10), close: closes[idx] }))
-        .filter(d => d.close != null && !isNaN(d.close));
-    } catch(e) { lastErr = e; }
-  }
-  throw lastErr;
-}
-
-async function getHistory(ticker, period) {
-  if (isFundTicker(ticker)) return await getHistoryFund(ticker, period);
-  // RenderバックエンドとCORSプロキシを並列で叩き、先に返った方を使う
-  const renderPromise = API_BASE
-    ? fetch(`${API_BASE}/api/history?tickers=${encodeURIComponent(ticker)}&period=${period}`, { signal: AbortSignal.timeout(15000) })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => { if (data[ticker]?.length) return data[ticker]; throw new Error(); })
-    : Promise.reject();
-  const corsPromise = getHistoryViaCors(ticker, period);
-  // どちらか先に成功した結果を返す
-  return Promise.any([renderPromise, corsPromise]);
-}
-
 // ── Constants ─────────────────────────────────────────────────────
 const COLORS = [
   '#4f6ef7','#22c55e','#f59e0b','#ef4444','#a855f7',
@@ -1169,7 +1122,7 @@ function mergePortfolioLogs(localLog, cloudLog) {
 }
 
 function periodCutoffDate(period) {
-  const days = { '5d': 5, '1mo': 31, '3mo': 92, '6mo': 183, '1y': 366, '2y': 732 };
+  const days = { '5d': 5, '1mo': 31, '3mo': 92, '6mo': 183, '1y': 366, '2y': 732, '5y': 1827 };
   const d = new Date();
   d.setDate(d.getDate() - (days[period] || 31));
   return d.toISOString().slice(0, 10);
@@ -1286,24 +1239,59 @@ function scheduleSyncSave() {
   syncTimer = setTimeout(() => sbSave(true), 500);
 }
 
-async function _doSave() {
-  const [stocksTs] = await Promise.all([
-    _sbSet('sp_stocks', stocks),
-    _sbSet('sp_portfolio_log', portfolioLog),
-    _sbSet('sp_collateral', collateralEntries),
-  ]);
-  // サーバー側の実際のタイムスタンプを使う（ローカル時刻とのズレを防ぐ）
-  const savedAt = stocksTs || new Date().toISOString();
-  lastCloudUpdatedAt = savedAt;
-  localStorage.setItem(LOCAL_UPDATED_AT_KEY, savedAt);
+// ── 差分同期: 直近に同期した内容を覚えておき、変わったキーだけ書き込む ──
+// 価格・取得メタ（currentPrice 等）は各端末が自分で再取得するため、
+// stocks の変更判定からは除外する（毎分の価格更新でクラウドを叩かない）。
+let _lastSynced = {};  // key -> 直近同期時の canonical JSON
+
+function _canonicalStocks() {
+  return JSON.stringify(stocks.map(({ currentPrice, prevClose, dayChange, lastFetched, fetchError, navDate, ...rest }) => rest));
+}
+
+function _syncPayloads() {
+  return {
+    sp_stocks:        _canonicalStocks(),
+    sp_portfolio_log: JSON.stringify(portfolioLog),
+    sp_collateral:    JSON.stringify(collateralEntries),
+  };
+}
+
+function _hasUnsyncedChanges() {
+  const p = _syncPayloads();
+  return Object.keys(p).some(k => p[k] !== _lastSynced[k]);
+}
+
+async function _doSave(force = false) {
+  const values = {
+    sp_stocks:        stocks,
+    sp_portfolio_log: portfolioLog,
+    sp_collateral:    collateralEntries,
+  };
+  const payloads = _syncPayloads();
+  const dirty = Object.keys(values).filter(k => force || payloads[k] !== _lastSynced[k]);
+  if (!dirty.length) return;
+  const tsList = await Promise.all(dirty.map(k => _sbSet(k, values[k])));
+  dirty.forEach(k => { _lastSynced[k] = payloads[k]; });
+  // sp_stocks を実際に書いた時だけ「最終更新」を進める。
+  // 書いていないのに進めると、他端末の sp_stocks 更新（cloudTs > localTs 判定）を
+  // 取り込めなくなるため。
+  const stocksIdx = dirty.indexOf('sp_stocks');
+  if (stocksIdx >= 0) {
+    // サーバー側の実際のタイムスタンプを使う（ローカル時刻とのズレを防ぐ）
+    const savedAt = tsList[stocksIdx] || new Date().toISOString();
+    lastCloudUpdatedAt = savedAt;
+    localStorage.setItem(LOCAL_UPDATED_AT_KEY, savedAt);
+  }
 }
 
 async function sbSave(silent = false) {
   if (isSyncing) return;
+  // 自動保存は変更がなければ何もしない（手動☁️・復元時は force で必ず書く）
+  if (silent && !_hasUnsyncedChanges()) return;
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    await _doSave();
+    await _doSave(!silent);
     updateSyncIcon('ok');
     if (!silent) toast('クラウドに保存しました ☁️', 'success');
   } catch(e) {
@@ -1385,6 +1373,12 @@ async function sbLoad(silent = false) {
         stocks            = cloudStocks.map(migrateStock);
         portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
         if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
+        // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
+        // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
+        // 差分が出て dirty になり、次の保存で正しくアップロードされる。
+        _lastSynced.sp_stocks        = _canonicalStocks();
+        _lastSynced.sp_portfolio_log = JSON.stringify(normalizePortfolioLog(cloudLog || []));
+        if (Array.isArray(cloudCollateral)) _lastSynced.sp_collateral = JSON.stringify(collateralEntries);
         recordDailyLog();
         lastCloudUpdatedAt = cloudUpdatedAt;
         localStorage.setItem('stocks', JSON.stringify(stocks));
@@ -1441,7 +1435,7 @@ async function smartSync() {
 
 // 他デバイスの変更を検知するポーリング（5分ごと）
 async function pollCloudChanges() {
-  if (isSyncing) return;
+  if (isSyncing || document.hidden) return;  // 非表示中はスキップ（Realtime 購読が復帰時に拾う）
   try {
     const cloudTs = await _sbGetUpdatedAt('sp_stocks');
     const localTs = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
@@ -1451,68 +1445,6 @@ async function pollCloudChanges() {
     }
   } catch(e) {
     // ポーリング失敗は無視
-  }
-}
-
-// ── (削除済みのGist関連コード用スタブ) ─────────────────────────────
-async function recoverLogsFromGistHistory() {
-  toast('この機能はSupabase移行により廃止されました', 'error');
-  return;
-
-  if (isSyncing) return;
-  isSyncing = true;
-  updateSyncIcon('syncing');
-
-  let shouldPushRecoveredLog = false;
-
-  try {
-    const headRes = await fetch(`${GIST_API}/${syncCfg.gistId}`, { headers: gistHeaders() });
-    if (!headRes.ok) throw new Error('Gist履歴の取得に失敗しました');
-    const head = await headRes.json();
-    const versions = (head.history || []).map(h => h.version).slice(0, 30);
-    if (!versions.length) throw new Error('履歴が見つかりません');
-
-    let recovered = [];
-    for (const version of versions) {
-      try {
-        const revRes = await fetch(`${GIST_API}/${syncCfg.gistId}/${version}`, { headers: gistHeaders() });
-        if (!revRes.ok) continue;
-        const rev = await revRes.json();
-        const content = rev.files?.['portfolio.json']?.content;
-        if (!content) continue;
-        const parsed = JSON.parse(content);
-        if (!Array.isArray(parsed) && Array.isArray(parsed.log)) {
-          recovered = mergePortfolioLogs(recovered, parsed.log);
-        }
-      } catch (e) {
-        // 個別リビジョン失敗は無視して継続
-      }
-    }
-
-    const beforeDays = portfolioLog.length;
-    const merged = mergePortfolioLogs(portfolioLog, recovered);
-    const afterDays = merged.length;
-
-    if (afterDays > beforeDays) {
-      portfolioLog = merged;
-      save(true);
-      renderLineChart();
-      shouldPushRecoveredLog = true;
-      showSyncStatus('success', `ログを復元しました: ${beforeDays}日 → ${afterDays}日`);
-      toast(`ログ復元: ${beforeDays}日 → ${afterDays}日`, 'success');
-    } else {
-      showSyncStatus('info', `復元できる追加ログはありませんでした（${afterDays}日）`);
-      toast('追加で復元できるログはありませんでした', 'success');
-    }
-
-    updateSyncIcon('ok');
-  } catch (e) {
-    updateSyncIcon('error');
-    showSyncStatus('error', e.message || 'ログ復元に失敗しました');
-    toast('ログ復元に失敗しました', 'error');
-  } finally {
-    isSyncing = false;
-    if (shouldPushRecoveredLog) sbSave(true);
   }
 }
 
@@ -1563,18 +1495,65 @@ function wakeRender() {
 
 // タブが再び見えるようになったら（PC スリープ復帰・別タブから戻った等）再プローブ
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden || !API_BASE) return;
-  // 直近で wake していなければ再プローブを許可
-  if (Date.now() - _renderWakeTs > RENDER_WAKE_TTL_MS) {
+  if (document.hidden) return;
+  // Render を再プローブ（直近で wake していなければ）
+  if (API_BASE && Date.now() - _renderWakeTs > RENDER_WAKE_TTL_MS) {
     _renderWakePromise = null;
     _renderWakeTs = 0;
     wakeRender();
   }
+  // 非表示中は価格更新を止めているため、復帰時に古ければ即更新してカウントダウンを立て直す
+  if (Date.now() - lastPriceFetchTs > refreshIntervalSec() * 1000) {
+    autoRefreshCountdown = refreshIntervalSec();
+    fetchAllPrices();
+  } else {
+    updateCountdownLabel();
+  }
 });
 
-// 1分ごとに価格を自動更新
-const AUTO_REFRESH_INTERVAL = 60; // 秒
-let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+// ── 市場稼働判定（サーバーの _is_jp/us_market_open と同等。閉場中はポーリングを緩める）──
+function _wallClock(timeZone) {
+  // 指定タイムゾーンの「壁時計」をローカル Date として得る（曜日・時刻の判定用）
+  return new Date(new Date().toLocaleString('en-US', { timeZone }));
+}
+function isJpMarketOpen(d = _wallClock('Asia/Tokyo')) {
+  const wd = d.getDay();
+  if (wd === 0 || wd === 6) return false;            // 土日
+  const m = d.getHours() * 60 + d.getMinutes();
+  return (m >= 540 && m < 690) || (m >= 750 && m < 930); // 前場 9:00-11:30 / 後場 12:30-15:30
+}
+function isUsMarketOpen(d = _wallClock('America/New_York')) {
+  const wd = d.getDay();
+  if (wd === 0 || wd === 6) return false;
+  const m = d.getHours() * 60 + d.getMinutes();
+  return m >= 570 && m < 960;                         // 9:30-16:00 ET
+}
+// 保有銘柄のいずれかの市場が稼働中か（暗号資産は 24/7 のため常に true）
+function anyHeldMarketActive() {
+  if (stocks.some(s => s.market === 'CRYPTO')) return true;
+  const hasJp = stocks.some(s => s.market === 'JP' || s.market === 'FUND');
+  const hasUs = stocks.some(s => s.market === 'US');
+  return (hasJp && isJpMarketOpen()) || (hasUs && isUsMarketOpen());
+}
+
+// 価格自動更新: 取引時間中は 60 秒、全市場閉場中は 10 分。タブ非表示中は停止（電池・通信を節約）。
+const AUTO_REFRESH_ACTIVE = 60;   // 秒
+const AUTO_REFRESH_IDLE   = 600;  // 秒
+function refreshIntervalSec() { return anyHeldMarketActive() ? AUTO_REFRESH_ACTIVE : AUTO_REFRESH_IDLE; }
+let autoRefreshCountdown = refreshIntervalSec();
+let lastPriceFetchTs = Date.now();
+
+function fmtCountdown(sec) {
+  if (sec >= 60) { const m = Math.floor(sec / 60), s = sec % 60; return s ? `${m}分${s}秒後` : `${m}分後`; }
+  return `${sec}秒後`;
+}
+function updateCountdownLabel() {
+  const el = document.getElementById('lastUpdated');
+  if (!el) return;
+  const base = (el.dataset.base || el.textContent).replace(/ \(次回更新: .+?\)$/, '');
+  el.dataset.base = base;
+  el.textContent = document.hidden ? base : base + ` (次回更新: ${fmtCountdown(autoRefreshCountdown)})`;
+}
 
 render();
 renderPieChart();
@@ -1584,27 +1563,28 @@ fetchHistory(currentPeriod);
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
 
-setInterval(fetchAllPrices, AUTO_REFRESH_INTERVAL * 1000);
+// 1 秒ごとのカウントダウン。タブ非表示中はカウントを進めず価格更新もしない。
 setInterval(() => {
+  if (document.hidden) { updateCountdownLabel(); return; }
   autoRefreshCountdown--;
-  if (autoRefreshCountdown <= 0) autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
-  const el = document.getElementById('lastUpdated');
-  if (el) {
-    const base = el.dataset.base || el.textContent;
-    el.dataset.base = base.replace(/ \(次回更新: \d+秒後\)$/, '');
-    el.textContent = el.dataset.base + ` (次回更新: ${autoRefreshCountdown}秒後)`;
+  if (autoRefreshCountdown <= 0) {
+    autoRefreshCountdown = refreshIntervalSec();
+    fetchAllPrices();
   }
+  updateCountdownLabel();
 }, 1000);
 
-// Render バックエンドをスリープさせないよう10分ごとにping
+// Render バックエンドをスリープさせないよう10分ごとにping（タブ表示中のみ。GitHub Actions の keep-warm が常時補完）
 if (API_BASE) {
   setInterval(() => {
+    if (document.hidden) return;
     fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000), cache: 'no-store' }).catch(() => {});
   }, 10 * 60 * 1000);
 }
 
 // 取りこぼし対策: タブを開いている間は15分ごとに当日ログを補完
 setInterval(() => {
+  if (document.hidden) return;
   if (recordDailyLog()) {
     save();
     renderLineChart();
@@ -1663,11 +1643,18 @@ function cacheAgeText(ts) {
 // ── Persistence ───────────────────────────────────────────────────
 
 function save(skipSync = false) {
-  const now = new Date().toISOString();
   localStorage.setItem('stocks', JSON.stringify(stocks));
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
   localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries));
-  localStorage.setItem(LOCAL_UPDATED_AT_KEY, now);
+  // 「最終更新」タイムスタンプは同期対象のユーザーデータ（銘柄・担保金）が
+  // 変わった時だけ進める。価格更新だけで進めると localTs が常に最新になり、
+  // 他端末の sp_stocks 変更（cloudTs > localTs 判定）を取り込めなくなる。
+  const userDataChanged =
+    _canonicalStocks() !== _lastSynced.sp_stocks ||
+    JSON.stringify(collateralEntries) !== _lastSynced.sp_collateral;
+  if (userDataChanged) {
+    localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
+  }
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   if (!skipSync) scheduleSyncSave();
@@ -1679,29 +1666,15 @@ async function checkAPI() {
   const label = document.getElementById('apiLabel');
   dot.style.background = 'var(--yellow)';
   label.textContent    = '確認中...';
-  try {
-    // Render はコールドスタートで最大60秒かかるため、ヘルスチェックを先に待つ。
-    // wakeRender 中はラベルを切り替えてユーザーに状況を伝える。
-    if (API_BASE) {
-      label.textContent = 'サーバ起動中...';
-      await wakeRender();
-    }
-    await getCurrentPrice('AAPL');
-    apiOnline = true;
-    dot.style.background = 'var(--green)';
-    label.textContent    = 'Yahoo Finance ✓';
-  } catch (e) {
-    apiOnline = false;
-    const cache = loadPriceCache();
-    if (cache) {
-      dot.style.background = 'var(--yellow)';
-      label.textContent    = `キャッシュ (${cacheAgeText(cache.ts)})`;
-    } else {
-      dot.style.background = 'var(--red)';
-      label.textContent    = 'API接続エラー';
-    }
+  // Render はコールドスタートで最大60秒かかるため、ヘルスチェックを先に待つ。
+  // wakeRender 中はラベルを切り替えてユーザーに状況を伝える。
+  if (API_BASE) {
+    label.textContent = 'サーバ起動中...';
+    try { await wakeRender(); } catch(e) {}
   }
-  // 失敗時もfetchAllPricesを呼ぶ（キャッシュから価格を復元するため）
+  // 接続テスト用の単独取得（旧: AAPL 1銘柄）は廃止。
+  // 全銘柄バッチの結果から fetchAllPrices がAPI状態を判定・表示するため、
+  // 初回の価格表示が1往復ぶん早くなる。
   fetchAllPrices();
 }
 
@@ -1922,7 +1895,8 @@ async function fetchAllPrices() {
     isFetching = false;
     btn.innerHTML = '📡 価格を自動取得';
     btn.disabled  = false;
-    autoRefreshCountdown = AUTO_REFRESH_INTERVAL; // カウントダウンリセット
+    autoRefreshCountdown = refreshIntervalSec(); // カウントダウンリセット（閉場中は長め）
+    lastPriceFetchTs = Date.now();
   }
 }
 
@@ -1998,7 +1972,7 @@ function renderLineChart() {
 
   const labels = points.map(p => {
     const [y, m, d] = p.date.split('-');
-    return ['1y','2y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
+    return ['1y','2y','5y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
   });
 
   if (lineChart) lineChart.destroy();
@@ -2057,7 +2031,8 @@ function renderPieChart() {
     .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
     .sort((a, b) => b.value - a.value);
   const total  = data.reduce((s, d) => s + d.value, 0);
-  const colors = COLORS.slice(0, data.length);
+  // 12色を超える銘柄数でも循環して全セグメントに色を割り当てる
+  const colors = data.map((_, i) => COLORS[i % COLORS.length]);
 
   if (pieChart) pieChart.destroy();
   pieChart = new Chart(document.getElementById('pieCanvas').getContext('2d'), {
@@ -2506,11 +2481,20 @@ function saveStock() {
 }
 function editStock(id)   { openModal(id); }
 function deleteStock(id) {
-  const s = stocks.find(x => x.id === id);
-  if (!confirm(`「${s.ticker} ${s.name}」を削除しますか？`)) return;
-  stocks = stocks.filter(x => x.id !== id);
+  const idx = stocks.findIndex(x => x.id === id);
+  if (idx < 0) return;
+  const removed = stocks[idx];
+  stocks.splice(idx, 1);
   save(); render(); renderPieChart();
-  toast(`${s.ticker} を削除しました`);
+  // confirm の代わりに「元に戻す」付きトーストで誤操作を救済
+  toast(`${removed.ticker} を削除しました`, 'success', {
+    label: '元に戻す',
+    onClick: () => {
+      stocks.splice(Math.min(idx, stocks.length), 0, removed);
+      save(); render(); renderPieChart();
+      toast(`${removed.ticker} を復元しました`, 'success');
+    },
+  });
 }
 
 // ── インポート ────────────────────────────────────────────────────
@@ -2738,7 +2722,8 @@ async function fetchImportNames() {
 
   await Promise.allSettled(
     pending.map(async ({ r, i }) => {
-      const yahooTicker = r.market === 'US' ? r.ticker : r.ticker + '.T';
+      // CRYPTO の -USD 付与・SBI 7桁コードのゼロ埋めも含めて正規化
+      const yahooTicker = getYahooTicker(r.ticker, r.market);
       try {
         if (isFundTicker(yahooTicker)) {
           r.name = await getFundNameJS(yahooTicker);
@@ -2764,8 +2749,10 @@ function executeImport() {
   const toAdd = replaceMode ? importRows : importRows.filter(r => !r.duplicate);
   if (!toAdd.length) { toast('追加できる銘柄がありません', 'error'); return; }
 
+  let prevStocks = null;
   if (replaceMode && stocks.length > 0) {
     if (!confirm(`現在の ${stocks.length} 件の銘柄をすべて削除して、CSV の ${toAdd.length} 件で置き換えます。よろしいですか？`)) return;
+    prevStocks = stocks.slice();   // 置換前の状態を退避（アンドゥ用）
     stocks = [];
   }
 
@@ -2788,7 +2775,15 @@ function executeImport() {
 
   save(); render(); renderPieChart();
   document.getElementById('importOverlay').classList.remove('open');
-  toast(`${toAdd.length} 件を${replaceMode ? '復元' : 'インポート'}しました`, 'success');
+  const undo = prevStocks ? {
+    label: '元に戻す',
+    onClick: () => {
+      stocks = prevStocks;
+      save(); render(); renderPieChart();
+      toast(`${prevStocks.length} 件の銘柄を復元しました`, 'success');
+    },
+  } : null;
+  toast(`${toAdd.length} 件を${replaceMode ? '復元' : 'インポート'}しました`, 'success', undo);
   // インポート後は最新価格を取得
   setTimeout(fetchAllPrices, 200);
 }
@@ -3106,12 +3101,45 @@ function deleteCollateral(id) {
 
 // ── トースト ──────────────────────────────────────────────────────
 let toastTimer;
-function toast(msg, type = 'success') {
+let _toastLockUntil = 0;   // アクション付きトースト表示中は通常トーストで上書きしない期限
+// action = { label, onClick } を渡すとトースト内に「元に戻す」等のボタンを表示する
+function toast(msg, type = 'success', action = null) {
   const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className   = 'toast ' + type + ' show';
+  // 「元に戻す」表示中に自動価格取得などの通常トーストが来ても上書きしない（アンドゥを守る）
+  if (!action && Date.now() < _toastLockUntil) return;
+  el.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  el.appendChild(span);
+  let duration = 3000;
+  if (action && typeof action.onClick === 'function') {
+    const btn = document.createElement('button');
+    btn.className   = 'toast-action';
+    btn.textContent = action.label || '元に戻す';
+    btn.onclick = () => {
+      _toastLockUntil = 0;          // 先にロック解除（復元トーストを表示できるように）
+      el.classList.remove('show');
+      clearTimeout(toastTimer);
+      action.onClick();
+    };
+    el.appendChild(btn);
+    duration = 6000;                // 取り消し操作の猶予を長めに
+    _toastLockUntil = Date.now() + duration;
+  } else {
+    _toastLockUntil = 0;
+  }
+  el.className = 'toast ' + type + ' show';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+  toastTimer = setTimeout(() => { el.classList.remove('show'); _toastLockUntil = 0; }, duration);
+}
+</script>
+
+<!-- PWA: Service Worker 登録（ホーム画面追加・オフライン表示） -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW register failed:', err));
+  });
 }
 </script>
 </body>

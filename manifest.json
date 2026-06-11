@@ -1,0 +1,20 @@
+{
+  "name": "株式ポートフォリオ管理",
+  "short_name": "Portfolio",
+  "description": "保有株式・投資信託・暗号資産の評価額と損益をまとめて管理",
+  "lang": "ja",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f1117",
+  "theme_color": "#0f1117",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

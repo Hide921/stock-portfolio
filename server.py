@@ -1221,6 +1221,26 @@ def index():
     return resp
 
 
+# ── PWA 静的ファイル（ローカル実行時。GitHub Pages では直接配信される）──
+@app.route('/manifest.json')
+def manifest():
+    return send_from_directory(BASE_DIR, 'manifest.json', mimetype='application/manifest+json')
+
+
+@app.route('/sw.js')
+def service_worker():
+    resp = send_from_directory(BASE_DIR, 'sw.js', mimetype='application/javascript')
+    # Service Worker は常に最新を取得（古い SW のキャッシュ固定を防ぐ）
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp
+
+
+@app.route('/favicon.svg')
+def favicon():
+    return send_from_directory(BASE_DIR, 'favicon.svg', mimetype='image/svg+xml')
+
+
 # ── API ───────────────────────────────────────────────────────────
 @app.route('/api/health')
 def health():
