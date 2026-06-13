@@ -1083,6 +1083,9 @@ _hist_cache:  dict = {}   # (ticker, period) -> {'data': [...], 'ts': float}
 PRICE_CACHE_TTL = 300     # 5分（フォールバック）
 HIST_CACHE_TTL  = 600     # 10分
 
+# 日次バックアップで Gist 内に保持する backup-*.json の最大件数（古いものから削除）
+BACKUP_KEEP = 30
+
 # ── 市場時間に応じた可変TTL ──
 # 取引時間中: 60秒（鮮度優先）
 # 取引時間外: 15分（レート制限保護）
@@ -1389,12 +1392,14 @@ def take_snapshot():
     try:
         r_now = req.get(gist_url, headers=gist_headers_map, timeout=10)
         r_now.raise_for_status()
-        latest_raw = r_now.json()['files']['portfolio.json']['content']
+        latest_files = r_now.json().get('files', {})
+        latest_raw = latest_files['portfolio.json']['content']
         latest_payload = json.loads(latest_raw)
         latest_stocks = latest_payload if isinstance(latest_payload, list) else latest_payload.get('stocks', stocks_data)
         latest_log    = [] if isinstance(latest_payload, list) else latest_payload.get('log', [])
     except Exception as e:
         logging.warning(f'SNAPSHOT gist re-GET failed ({type(e).__name__}): {e} — falling back to earlier snapshot')
+        latest_files  = {}
         latest_stocks = stocks_data
         latest_log    = log
 
@@ -1409,19 +1414,41 @@ def take_snapshot():
         latest_log = latest_log[-730:]
 
     new_payload = {'stocks': latest_stocks, 'log': latest_log}
+    portfolio_json = json.dumps(new_payload, ensure_ascii=False)
+
+    # ── 6. 日次バックアップ ──
+    # portfolio.json のコピーを backup-YYYY-MM-DD.json として同じ Gist 内に保存し、
+    # 誤同期・破損で portfolio.json が壊れても日付指定で巻き戻せるようにする。
+    # 直近 BACKUP_KEEP 件のみ保持し、古いものは PATCH で null を渡して削除する
+    # （ファイル名は ISO 日付なので辞書順 = 日付順）。
+    today_backup = f'backup-{today}.json'
+    files_payload = {
+        'portfolio.json': {'content': portfolio_json},
+        today_backup:     {'content': portfolio_json},
+    }
+    existing_backups = sorted(
+        fn for fn in latest_files
+        if re.fullmatch(r'backup-\d{4}-\d{2}-\d{2}\.json', fn)
+    )
+    keep_ordered = sorted(set(existing_backups) | {today_backup})
+    if len(keep_ordered) > BACKUP_KEEP:
+        for fn in keep_ordered[:len(keep_ordered) - BACKUP_KEEP]:
+            if fn != today_backup:
+                files_payload[fn] = None  # Gist API: null でファイル削除
+
     # If-Match で条件付き更新（Gist API が無視する場合もあるがログに残す）
     patch_headers = dict(gist_headers_map)
     if gist_etag:
         patch_headers['If-Match'] = gist_etag
     try:
         r = req.patch(gist_url, headers=patch_headers, timeout=10,
-                      json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
+                      json={'files': files_payload})
         if r.status_code == 412:
             logging.warning('SNAPSHOT gist 412 (etag mismatch) — retrying without If-Match after re-merge')
             # 既に最新データにマージ済みなので、If-Match 抜きで保存
             patch_headers.pop('If-Match', None)
             r = req.patch(gist_url, headers=patch_headers, timeout=10,
-                          json={'files': {'portfolio.json': {'content': json.dumps(new_payload, ensure_ascii=False)}}})
+                          json={'files': files_payload})
         r.raise_for_status()
     except Exception as e:
         logging.warning(f'SNAPSHOT gist PATCH failed ({type(e).__name__})')
@@ -1429,8 +1456,9 @@ def take_snapshot():
     # 以後のログ出力用にローカル変数を揃える
     log = latest_log
 
-    logging.info(f'SNAPSHOT {today}: ¥{round(total):,} (log={len(log)}件)')
-    return jsonify({'ok': True, 'date': today, 'value': round(total), 'log_count': len(log)})
+    logging.info(f'SNAPSHOT {today}: ¥{round(total):,} (log={len(log)}件, backup={today_backup})')
+    return jsonify({'ok': True, 'date': today, 'value': round(total),
+                    'log_count': len(log), 'backup': today_backup})
 
 
 @app.route('/api/proxy')
