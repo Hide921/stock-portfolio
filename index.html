@@ -17,10 +17,11 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://ugyashjjxoezvlnjtizw.supabase.co" crossorigin>
   <link rel="dns-prefetch" href="https://stock-portfolio-1-2rnh.onrender.com">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+  <!-- defer: HTML パースと初回描画をブロックしない。両ライブラリは起動後 Phase B で使う。 -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
           integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.104.1"
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.104.1"
           integrity="sha384-ZstPgNL30sIz6Hlxmz87Qsg817okoeAfmzXv89YLICmfsKv3pEdQKOokOL2IpVAS"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
@@ -1204,10 +1205,11 @@ function defaultStocks() {
 }
 
 // ── Supabase クラウド同期 ──────────────────────────────────────────
-const _sb = supabase.createClient(
-  'https://ugyashjjxoezvlnjtizw.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4'
-);
+// supabase-js を defer 読み込みするため、クライアント生成は起動後 Phase B（bootLibsReady）で行う。
+// _sb を参照する関数（sbLoad/sbSave/pollCloudChanges 等）はすべて Phase B 以降に呼ばれる。
+let _sb = null;
+const _SB_URL = 'https://ugyashjjxoezvlnjtizw.supabase.co';
+const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4';
 
 async function _sbGet(key) {
   const { data } = await _sb.from('user_data').select('value,updated_at').eq('key', key).maybeSingle();
@@ -1555,11 +1557,12 @@ function updateCountdownLabel() {
   el.textContent = document.hidden ? base : base + ` (次回更新: ${fmtCountdown(autoRefreshCountdown)})`;
 }
 
+// ── Phase A: ライブラリ非依存の初回描画（即時実行）─────────────────
+// テーブル描画・価格取得・サーバーウォームアップは CDN(chart.js/supabase) の
+// ダウンロードを待たずに即実行する。これで初回描画がライブラリ読み込みで
+// ブロックされず、起動直後にすぐ画面が出る。
 render();
-renderPieChart();
-// 価格取得とグラフ履歴取得を並列で開始（グラフを待たせない）
 checkAPI();
-fetchHistory(currentPeriod);
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
 
@@ -1591,27 +1594,50 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
-updateSyncIcon('syncing');
-setTimeout(() => sbLoad(true), 800);
+// ── Phase B: CDN(chart.js / supabase-js) ロード後に実行 ───────────────
+// defer スクリプトは DOMContentLoaded より前に実行されるため、この時点で
+// Chart / supabase は利用可能。CDN 取得に失敗しても各機能を個別にスキップし、
+// テーブル表示・価格更新（Phase A）はそのまま動く＝劣化動作で止まらない。
+function bootLibsReady() {
+  // 円グラフ・資産推移グラフ（Chart 依存。未ロードなら各関数が内部で no-op）
+  renderPieChart();
+  fetchHistory(currentPeriod);
 
-// Supabase Realtimeで他デバイスの変更を即時検知
-_sb.channel('portfolio_sync')
-  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'key=eq.sp_stocks' }, () => {
-    sbLoad(true);
-  })
-  .subscribe();
+  // クラウド同期（supabase 依存）
+  if (window.supabase) {
+    _sb = supabase.createClient(_SB_URL, _SB_KEY);
 
-// Realtime未対応環境のフォールバック: 30秒ごとにポーリング
-setInterval(pollCloudChanges, 30 * 1000);
+    // 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
+    updateSyncIcon('syncing');
+    setTimeout(() => sbLoad(true), 800);
 
-// ?upload=1 パラメータで強制アップロード（データ復元用）
-if (new URLSearchParams(location.search).get('upload') === '1') {
-  setTimeout(async () => {
-    localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
-    await sbSave(false);
-    history.replaceState({}, '', location.pathname);
-  }, 1200);
+    // Supabase Realtimeで他デバイスの変更を即時検知
+    _sb.channel('portfolio_sync')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'key=eq.sp_stocks' }, () => {
+        sbLoad(true);
+      })
+      .subscribe();
+
+    // Realtime未対応環境のフォールバック: 30秒ごとにポーリング
+    setInterval(pollCloudChanges, 30 * 1000);
+
+    // ?upload=1 パラメータで強制アップロード（データ復元用）
+    if (new URLSearchParams(location.search).get('upload') === '1') {
+      setTimeout(async () => {
+        localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
+        await sbSave(false);
+        history.replaceState({}, '', location.pathname);
+      }, 1200);
+    }
+  } else {
+    console.warn('supabase 未ロード: クラウド同期は無効（ローカルのみで動作）');
+    updateSyncIcon('error');
+  }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootLibsReady, { once: true });
+} else {
+  bootLibsReady();   // 既にパース完了済みなら（defer 実行後）即起動
 }
 
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
@@ -1917,6 +1943,7 @@ function setLineSeries(series) {
 
 // ── 推移グラフ（日次ログベース）─────────────────────────────────
 function renderLineChart() {
+  if (typeof Chart === 'undefined') return;   // CDN(defer) 未ロード時は no-op（ロード後に再描画される）
   const canvas      = document.getElementById('lineCanvas');
   const placeholder = document.getElementById('linePlaceholder');
   const statsEl     = document.getElementById('lineStats');
@@ -2025,6 +2052,7 @@ function renderLineChart() {
 
 // ── 円グラフ ──────────────────────────────────────────────────────
 function renderPieChart() {
+  if (typeof Chart === 'undefined') return;   // CDN(defer) 未ロード時は no-op（ロード後に再描画される）
   if (!stocks.length) return;
 
   const data  = stocks
@@ -3139,6 +3167,15 @@ function toast(msg, type = 'success', action = null) {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW register failed:', err));
+  });
+  // 起動はキャッシュ即表示（cache-first）。裏で新版を取得し中身が変われば
+  // SW が NEW_VERSION を通知 → その場で更新できるトーストを表示する。
+  let _updateToastShown = false;
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data && e.data.type === 'NEW_VERSION' && !_updateToastShown) {
+      _updateToastShown = true;
+      toast('新しいバージョンがあります', 'success', { label: '更新', onClick: () => location.reload() });
+    }
   });
 }
 </script>
