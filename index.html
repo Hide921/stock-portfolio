@@ -128,6 +128,30 @@
     .btn-danger:hover { background: rgba(239,68,68,0.1); }
     .btn-edit   { background: transparent; color: var(--accent); padding: 4px 8px; font-size: 12px; }
     .btn-edit:hover { background: rgba(79,110,247,0.1); }
+    .btn-sell   { background: transparent; color: var(--yellow); padding: 4px 8px; font-size: 12px; }
+    .btn-sell:hover { background: rgba(245,158,11,0.12); }
+
+    /* ── 売却 / 実現損益 ── */
+    .sell-preview { margin-top: 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+    .sell-preview .sp-row { display: flex; justify-content: space-between; gap: 16px; min-width: 200px; flex: 1; }
+    .sell-preview .sp-label { color: var(--text-muted); }
+    .sell-preview .sp-val { font-weight: 700; }
+    .modal.tx-modal { width: 860px; }
+    .tx-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .tx-sum-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; }
+    .tx-sum-label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+    .tx-sum-value { font-size: 18px; font-weight: 700; }
+    .tx-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .tx-manual { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    .tx-table-wrap { overflow: auto; max-height: 46vh; border: 1px solid var(--border); border-radius: 8px; }
+    .tx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .tx-table th { background: var(--surface2); padding: 9px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+    .tx-table td { padding: 9px 12px; border-top: 1px solid var(--border); white-space: nowrap; }
+    .tx-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .tx-empty { text-align: center; padding: 32px; color: var(--text-muted); }
+    .tx-type-sell { color: var(--red); font-weight: 600; }
+    .tx-type-buy  { color: var(--green); font-weight: 600; }
+    .tx-type-div  { color: var(--accent); font-weight: 600; }
 
     /* ── Table ── */
     /* overflow:hidden は sticky thead を無効化するため使わず、角丸は各セルに付与 */
@@ -408,6 +432,11 @@
       <div class="card-value" id="collateralTotal">¥0</div>
       <div class="card-sub" id="collateralSub">0件</div>
     </div>
+    <div class="card" id="realizedCard" style="display:none; cursor:pointer" onclick="openTxModal()" title="クリックで取引履歴を表示">
+      <div class="card-label">実現損益 (本年・確定)</div>
+      <div class="card-value neutral" id="realizedValue">¥0</div>
+      <div class="card-sub" id="realizedSub">累計: ¥0</div>
+    </div>
   </div>
 
   <!-- Charts -->
@@ -499,6 +528,7 @@
     </div>
     <div class="toolbar-left">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
+      <button class="btn-ghost" onclick="openTxModal()">💰 実現損益</button>
       <button class="btn-ghost" onclick="openRebalanceModal()">⚖️ リバランス</button>
       <button class="btn-ghost" onclick="openImportModal()">📋 インポート</button>
       <button class="btn-ghost" onclick="exportCSV()">📤 エクスポート</button>
@@ -735,6 +765,165 @@
     </div>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closePieModal()">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- 売却モーダル -->
+<div class="overlay" id="sellOverlay" onclick="closeSellModal(event)">
+  <div class="modal">
+    <h2 id="sellTitle">売却を記録</h2>
+    <div id="sellStockInfo" style="font-size:12px;color:var(--text-muted);margin-bottom:14px"></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>約定日 *</label>
+        <input type="date" id="sellDate">
+      </div>
+      <div class="form-group">
+        <label>口座区分</label>
+        <input type="text" id="sellAccount" disabled style="opacity:0.7">
+      </div>
+      <div class="form-group">
+        <label id="sellQtyLabel">売却数量 *</label>
+        <input type="number" id="sellQty" min="0" step="any" inputmode="decimal" oninput="onSellInput()">
+        <span class="form-hint" id="sellMaxHint"></span>
+      </div>
+      <div class="form-group">
+        <label id="sellPriceLabel">売却単価 *</label>
+        <input type="number" id="sellPrice" min="0" step="any" inputmode="decimal" oninput="onSellInput()">
+      </div>
+      <div class="form-group">
+        <label id="sellFeeLabel">手数料</label>
+        <input type="number" id="sellFee" min="0" step="any" value="0" inputmode="decimal" oninput="onSellInput()">
+      </div>
+      <div class="form-group full">
+        <label>メモ</label>
+        <input type="text" id="sellNote" placeholder="自由記述">
+      </div>
+    </div>
+    <div class="sell-preview" id="sellPreview"></div>
+    <div class="form-hint" style="margin-top:8px">記録すると保有数量が自動で減ります（全数量を売却すると一覧から外れます）。</div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeSellModal()">キャンセル</button>
+      <button class="btn-primary" onclick="saveSell()">売却を記録</button>
+    </div>
+  </div>
+</div>
+
+<!-- 実現損益・取引履歴モーダル -->
+<div class="overlay" id="txOverlay" onclick="closeTxModal(event)">
+  <div class="modal tx-modal">
+    <h2>💰 実現損益・取引履歴</h2>
+    <div class="tx-summary" id="txSummary"></div>
+    <div class="tx-toolbar">
+      <select id="txYearSelect" onchange="renderTxModal()"></select>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn-ghost" onclick="openSbiImport()">📥 SBI取込</button>
+        <button class="btn-ghost" onclick="toggleTxManualForm()" id="txManualToggle">＋ 手動で追加</button>
+        <button class="btn-ghost" onclick="exportRealizedCSV()">📤 CSV</button>
+      </div>
+      <input type="file" id="sbiFileInput" accept=".csv,.tsv,.txt" style="display:none" onchange="handleSbiFile(event)">
+    </div>
+
+    <!-- 手動追加フォーム -->
+    <div class="tx-manual" id="txManualForm" style="display:none">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>区分</label>
+          <select id="mtType" onchange="onMtTypeChange()"><option value="sell">売却</option><option value="buy">購入</option></select>
+        </div>
+        <div class="form-group">
+          <label>市場 (通貨)</label>
+          <select id="mtMarket">
+            <option value="JP">日本株 (¥)</option>
+            <option value="US">米国株 ($)</option>
+            <option value="FUND">投資信託 (¥)</option>
+            <option value="CRYPTO">暗号資産 ($)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>ティッカー</label>
+          <input type="text" id="mtTicker" placeholder="例: 7203">
+        </div>
+        <div class="form-group">
+          <label>銘柄名</label>
+          <input type="text" id="mtName" placeholder="任意">
+        </div>
+        <div class="form-group">
+          <label>約定日 *</label>
+          <input type="date" id="mtDate">
+        </div>
+        <div class="form-group">
+          <label>口座区分</label>
+          <select id="mtAccount"><option value="specific">特定口座</option><option value="nisa">NISA</option></select>
+        </div>
+        <div class="form-group">
+          <label>数量 *</label>
+          <input type="number" id="mtQty" min="0" step="any" inputmode="decimal">
+        </div>
+        <div class="form-group">
+          <label id="mtPriceLabel">売却単価 *</label>
+          <input type="number" id="mtPrice" min="0" step="any" inputmode="decimal">
+        </div>
+        <div class="form-group" id="mtAvgGroup">
+          <label>取得単価 *</label>
+          <input type="number" id="mtAvg" min="0" step="any" inputmode="decimal">
+        </div>
+        <div class="form-group">
+          <label>手数料</label>
+          <input type="number" id="mtFee" min="0" step="any" value="0" inputmode="decimal">
+        </div>
+        <div class="form-group full">
+          <label>メモ</label>
+          <input type="text" id="mtNote" placeholder="自由記述">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="toggleTxManualForm()">閉じる</button>
+        <button class="btn-primary" onclick="addManualTx()">追加</button>
+      </div>
+    </div>
+
+    <div class="tx-table-wrap">
+      <table class="tx-table">
+        <thead>
+          <tr>
+            <th>約定日</th>
+            <th>銘柄</th>
+            <th>区分</th>
+            <th>数量</th>
+            <th>単価</th>
+            <th>取得単価</th>
+            <th>実現損益(円)</th>
+            <th>口座</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="txTbody"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeTxModal()">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- SBI取込プレビューモーダル -->
+<div class="overlay" id="sbiImportOverlay" onclick="closeSbiImport(event)">
+  <div class="modal tx-modal">
+    <h2>📥 SBI 約定履歴の取込</h2>
+    <div id="sbiImportSummary" class="import-summary"></div>
+    <div id="sbiImportColInfo" class="form-hint" style="margin-bottom:10px;word-break:break-all"></div>
+    <div class="tx-table-wrap">
+      <table class="tx-table" id="sbiPreviewTable"></table>
+    </div>
+    <div class="form-hint" style="margin-top:8px;line-height:1.6">
+      取込先は<strong>取引履歴（ログ）のみ</strong>で、保有銘柄の数量は変更しません。<br>
+      信用返済の<strong>決済損益</strong>はそのまま実現損益に計上します。現物売・投信解約は取得単価が無いため実現損益は「—」になります（保有銘柄行の「売却」ボタンで記録すると取得単価から計算されます）。
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeSbiImport()">キャンセル</button>
+      <button class="btn-primary" id="sbiImportConfirmBtn" onclick="confirmSbiImport()">取込実行</button>
     </div>
   </div>
 </div>
@@ -1031,6 +1220,9 @@ const COLLATERAL_KEY  = 'collateral_v1';
 let collateralEditId  = null;
 let collateralOpen    = false;
 
+let transactions      = [];  // 取引履歴（売買ログ）[{id,date,type,ticker,quantity,price,avgCost,fee,realizedPLJPY,...}, ...]
+const TRANSACTIONS_KEY = 'transactions_v1';
+
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -1047,6 +1239,27 @@ function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ?
 function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
 function getCostJPY(s)       { return toJPY(s.avgPrice * s.quantity, s.avgCurrency || s.currency); }
 function getStockPLJPY(s)    { return toJPY(s.currentPrice * s.quantity, s.currency) - getCostJPY(s); }
+
+// 実現損益（円）: 約定時に確定した realizedPLJPY を優先。無ければ取得単価から計算。
+// 計算不可（買い・取得単価不明＝SBIの現物売/投信解約など）は null を返す。
+function calcRealizedJPY(tx) {
+  if (tx.type === 'dividend') return null;         // 配当は譲渡損益に含めない（別建て）
+  if (Number.isFinite(tx.realizedPLJPY)) return tx.realizedPLJPY;
+  if (tx.type === 'buy') return null;             // 取得（買い）は実現損益なし
+  if (!Number.isFinite(tx.avgCost)) return null;  // 取得単価不明 → 計算できない
+  const proceeds = toJPY((tx.price || 0) * (tx.quantity || 0), tx.currency);
+  const cost     = toJPY(tx.avgCost * (tx.quantity || 0), tx.avgCurrency || tx.currency);
+  const fee      = toJPY(tx.fee || 0, tx.currency);
+  return proceeds - cost - fee;
+}
+// 実現損益（譲渡損益）として確定している明細だけを合算（null は除外）
+function sumRealizedJPY(txs) {
+  return txs.reduce((s, t) => { const v = calcRealizedJPY(t); return s + (Number.isFinite(v) ? v : 0); }, 0);
+}
+// 配当金の合算（税引き前）
+function sumDividendJPY(txs) {
+  return txs.reduce((s, t) => s + (t.type === 'dividend' && Number.isFinite(t.dividendJPY) ? t.dividendJPY : 0), 0);
+}
 
 function fmtPrice(p, cur) {
   if (p == null) return '—';
@@ -1255,6 +1468,7 @@ function _syncPayloads() {
     sp_stocks:        _canonicalStocks(),
     sp_portfolio_log: JSON.stringify(portfolioLog),
     sp_collateral:    JSON.stringify(collateralEntries),
+    sp_transactions:  JSON.stringify(transactions),
   };
 }
 
@@ -1268,6 +1482,7 @@ async function _doSave(force = false) {
     sp_stocks:        stocks,
     sp_portfolio_log: portfolioLog,
     sp_collateral:    collateralEntries,
+    sp_transactions:  transactions,
   };
   const payloads = _syncPayloads();
   const dirty = Object.keys(values).filter(k => force || payloads[k] !== _lastSynced[k]);
@@ -1323,17 +1538,29 @@ async function sbLoad(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [stocksRow, logRow, collateralRow] = await Promise.all([
+    const [stocksRow, logRow, collateralRow, txRow] = await Promise.all([
       _sbGet('sp_stocks'),
       _sbGet('sp_portfolio_log'),
       _sbGet('sp_collateral'),
+      _sbGet('sp_transactions'),
     ]);
     const cloudStocks     = stocksRow?.value      ?? null;
     const cloudLog        = logRow?.value          ?? null;
     const cloudCollateral = collateralRow?.value   ?? null;
+    const cloudTransactions = txRow?.value         ?? null;
     const cloudUpdatedAt  = stocksRow?.updated_at  ?? null;
     const localStocks     = JSON.parse(localStorage.getItem('stocks') || '[]');
     const localLog        = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
+
+    // 取引履歴は端末間で失わないよう常にマージ（和集合）。クラウド側の版を「同期済み」として記録し、
+    // マージで増えた分は次の保存でクラウドへ反映する（ポートフォリオ推移と同じ方式）。
+    let localTransactions = [];
+    try { localTransactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) {}
+    if (Array.isArray(cloudTransactions) || localTransactions.length) {
+      transactions = mergeTransactions(localTransactions, cloudTransactions);
+      localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+      _lastSynced.sp_transactions = JSON.stringify(Array.isArray(cloudTransactions) ? cloudTransactions : []);
+    }
 
     // 旧Gist設定が残っていればGistからデータを取得してSupabaseへ移行
     let gistData = null;
@@ -1375,6 +1602,7 @@ async function sbLoad(silent = false) {
         stocks            = cloudStocks.map(migrateStock);
         portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
         if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
+        // 取引履歴(transactions)は上部で和集合マージ済み。
         // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
         // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
         // 差分が出て dirty になり、次の保存で正しくアップロードされる。
@@ -1468,6 +1696,7 @@ const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
 stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
+try { transactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) { transactions = []; }
 if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
 renderCollateral();
 
@@ -1672,12 +1901,14 @@ function save(skipSync = false) {
   localStorage.setItem('stocks', JSON.stringify(stocks));
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
   localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries));
-  // 「最終更新」タイムスタンプは同期対象のユーザーデータ（銘柄・担保金）が
+  localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+  // 「最終更新」タイムスタンプは同期対象のユーザーデータ（銘柄・担保金・取引履歴）が
   // 変わった時だけ進める。価格更新だけで進めると localTs が常に最新になり、
   // 他端末の sp_stocks 変更（cloudTs > localTs 判定）を取り込めなくなる。
   const userDataChanged =
     _canonicalStocks() !== _lastSynced.sp_stocks ||
-    JSON.stringify(collateralEntries) !== _lastSynced.sp_collateral;
+    JSON.stringify(collateralEntries) !== _lastSynced.sp_collateral ||
+    JSON.stringify(transactions) !== _lastSynced.sp_transactions;
   if (userDataChanged) {
     localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
   }
@@ -2238,6 +2469,21 @@ function render() {
   }
   document.getElementById('collateralHeaderSum').textContent = '合計: ' + fmtJPY(collateralSum);
 
+  // 実現損益カード（売却記録がある時だけ表示）
+  const hasTx = transactions.length > 0;
+  document.getElementById('realizedCard').style.display = hasTx ? '' : 'none';
+  if (hasTx) {
+    const thisYear     = String(new Date().getFullYear());
+    const realizedYear = sumRealizedJPY(transactions.filter(t => (t.date || '').slice(0, 4) === thisYear));
+    const realizedAll  = sumRealizedJPY(transactions);
+    const rvEl = document.getElementById('realizedValue');
+    rvEl.textContent = (realizedYear >= 0 ? '▲' : '▼') + fmtJPY(realizedYear);
+    rvEl.className   = 'card-value ' + plClass(realizedYear);
+    const divYear = sumDividendJPY(transactions.filter(t => (t.date || '').slice(0, 4) === thisYear));
+    document.getElementById('realizedSub').textContent =
+      `累計: ${realizedAll >= 0 ? '+' : '-'}${fmtJPY(realizedAll)}` + (divYear ? ` ／ 配当: +${fmtJPY(divYear)}` : '');
+  }
+
   // 総資産カード（現物株式＋担保金＋信用損益）
   // 信用建玉の評価額そのものは借入分を含むため、純資産への寄与は含み損益(marginPL)のみ。
   const grandTotal = totalValueJPY + collateralSum + marginPL;
@@ -2285,7 +2531,7 @@ function render() {
   // テーブル行
   const tbody = document.getElementById('tableBody');
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-icon">📊</div><div>銘柄が見つかりません</div></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty"><div class="empty-icon">📊</div><div>銘柄が見つかりません</div></div></td></tr>`;
     return;
   }
   tbody.innerHTML = list.map(s => {
@@ -2326,6 +2572,7 @@ function render() {
       <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
       <td><div class="actions">
         <button class="btn-edit"   onclick="editStock('${s.id}')">編集</button>
+        <button class="btn-sell"   onclick="openSellModal('${s.id}')">売却</button>
         <button class="btn-danger" onclick="deleteStock('${s.id}')">削除</button>
       </div></td>
     </tr>`;
@@ -2392,6 +2639,9 @@ document.addEventListener('keydown', e => {
     document.getElementById('overlay').classList.remove('open');
     document.getElementById('syncOverlay')?.classList.remove('open');
     document.getElementById('pieOverlay')?.classList.remove('open');
+    document.getElementById('sellOverlay')?.classList.remove('open');
+    document.getElementById('txOverlay')?.classList.remove('open');
+    document.getElementById('sbiImportOverlay')?.classList.remove('open');
     editId = null;
   }
 });
@@ -2523,6 +2773,606 @@ function deleteStock(id) {
       toast(`${removed.ticker} を復元しました`, 'success');
     },
   });
+}
+
+// ── 売却 / 実現損益 ───────────────────────────────────────────────
+let sellStockId = null;
+function unitOf(market) { return market === 'FUND' ? '口' : market === 'CRYPTO' ? '枚' : '株'; }
+function todayJST() { return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }); }
+
+function openSellModal(id) {
+  const s = stocks.find(x => x.id === id);
+  if (!s) return;
+  sellStockId = id;
+  const cur  = s.currency;
+  const sym  = cur === 'USD' ? '$' : '¥';
+  const unit = unitOf(s.market);
+  document.getElementById('sellTitle').textContent = `${s.ticker} を売却`;
+  document.getElementById('sellStockInfo').innerHTML =
+    `${esc(s.name)} ／ 保有 ${s.quantity.toLocaleString('ja-JP')} ${unit} ／ 取得単価 ${fmtPrice(s.avgPrice, s.avgCurrency || cur)}` +
+    (s.currentPrice ? ` ／ 現在値 ${fmtPrice(s.currentPrice, cur)}` : '');
+  document.getElementById('sellDate').value    = todayJST();
+  document.getElementById('sellAccount').value = s.accountType === 'nisa' ? 'NISA' : '特定口座';
+  document.getElementById('sellQtyLabel').textContent = `売却数量 (${unit}) *`;
+  document.getElementById('sellQty').value      = s.quantity;
+  document.getElementById('sellMaxHint').textContent  = `最大 ${s.quantity.toLocaleString('ja-JP')} ${unit}`;
+  document.getElementById('sellPriceLabel').textContent = `売却単価 (${sym}) *`;
+  document.getElementById('sellPrice').value    = s.currentPrice || '';
+  document.getElementById('sellFeeLabel').textContent = `手数料 (${sym})`;
+  document.getElementById('sellFee').value      = 0;
+  document.getElementById('sellNote').value     = '';
+  onSellInput();
+  document.getElementById('sellOverlay').classList.add('open');
+}
+function closeSellModal(e) {
+  if (e && e.target !== document.getElementById('sellOverlay')) return;
+  document.getElementById('sellOverlay').classList.remove('open');
+  sellStockId = null;
+}
+function _sellInputs() {
+  return {
+    qty:   parseFloat(document.getElementById('sellQty').value),
+    price: parseFloat(document.getElementById('sellPrice').value),
+    fee:   parseFloat(document.getElementById('sellFee').value) || 0,
+  };
+}
+function onSellInput() {
+  const s = stocks.find(x => x.id === sellStockId);
+  if (!s) return;
+  const { qty, price, fee } = _sellInputs();
+  const avgCur = s.avgCurrency || s.currency;
+  const el = document.getElementById('sellPreview');
+  if (!Number.isFinite(qty) || !Number.isFinite(price) || qty <= 0) {
+    el.innerHTML = `<div class="sp-row"><span class="sp-label">実現損益</span><span class="sp-val neutral">数量・単価を入力してください</span></div>`;
+    return;
+  }
+  const proceedsJPY = toJPY(price * qty, s.currency) - toJPY(fee, s.currency);
+  const costJPY     = toJPY(s.avgPrice * qty, avgCur);
+  const plJPY       = proceedsJPY - costJPY;
+  const plPct       = costJPY ? plJPY / costJPY * 100 : 0;
+  const over        = qty > s.quantity + 1e-9;
+  el.innerHTML =
+    `<div class="sp-row"><span class="sp-label">売却額(円)</span><span class="sp-val">${fmtJPY(toJPY(price * qty, s.currency))}</span></div>` +
+    `<div class="sp-row"><span class="sp-label">取得額(円)</span><span class="sp-val">${fmtJPY(costJPY)}</span></div>` +
+    `<div class="sp-row"><span class="sp-label">実現損益(円)</span><span class="sp-val ${plClass(plJPY)}">${plJPY >= 0 ? '+' : '-'}${fmtJPY(plJPY)}</span></div>` +
+    `<div class="sp-row"><span class="sp-label">損益率</span><span class="sp-val ${plClass(plPct)}">${pctStr(plPct)}</span></div>` +
+    (over ? `<div class="sp-row"><span class="sp-val loss">⚠ 売却数量が保有数を超えています</span></div>` : '');
+}
+function saveSell() {
+  const s = stocks.find(x => x.id === sellStockId);
+  if (!s) return;
+  const date = document.getElementById('sellDate').value || todayJST();
+  const note = document.getElementById('sellNote').value.trim();
+  const { qty, price, fee } = _sellInputs();
+  if (!Number.isFinite(qty) || !Number.isFinite(price) || qty <= 0 || price < 0) { toast('数量と単価を正しく入力してください', 'error'); return; }
+  if (qty > s.quantity + 1e-9) { toast('売却数量が保有数を超えています', 'error'); return; }
+  const avgCur        = s.avgCurrency || s.currency;
+  const proceedsJPY   = toJPY(price * qty, s.currency) - toJPY(fee, s.currency);
+  const costJPY       = toJPY(s.avgPrice * qty, avgCur);
+  const realizedPLJPY = Math.round(proceedsJPY - costJPY);
+  const sameCur       = (avgCur === s.currency);
+  const tx = {
+    id: uid(), date, type: 'sell',
+    ticker: s.ticker, name: s.name, market: s.market, currency: s.currency, avgCurrency: avgCur,
+    accountType: s.accountType || 'specific', tradeType: s.tradeType || 'spot',
+    quantity: qty, price, fee, avgCost: s.avgPrice,
+    realizedPL: sameCur ? (price * qty - fee - s.avgPrice * qty) : null,
+    realizedPLJPY, rate: usdJpyRate, note, stockId: s.id,
+  };
+  transactions.push(tx);
+  // 保有数量を減算（全数量売却なら一覧から外す）
+  const remaining = +(s.quantity - qty).toFixed(8);
+  let removedIdx = -1, removedStock = null;
+  if (remaining <= 1e-9) {
+    removedIdx   = stocks.findIndex(x => x.id === s.id);
+    removedStock = stocks[removedIdx];
+    stocks.splice(removedIdx, 1);
+  } else {
+    s.quantity = remaining;
+  }
+  save(); render(); renderPieChart();
+  closeSellModal();
+  toast(`${tx.ticker} を売却記録（実現損益 ${realizedPLJPY >= 0 ? '+' : '-'}${fmtJPY(realizedPLJPY)}）`, 'success', {
+    label: '取り消し',
+    onClick: () => {
+      transactions = transactions.filter(t => t.id !== tx.id);
+      if (removedStock) stocks.splice(Math.min(removedIdx, stocks.length), 0, removedStock);
+      else s.quantity = +(s.quantity + qty).toFixed(8);
+      save(); render(); renderPieChart();
+      toast('売却記録を取り消しました', 'success');
+    },
+  });
+}
+
+// ── 取引履歴モーダル ──────────────────────────────────────────────
+function openTxModal() {
+  document.getElementById('txManualForm').style.display = 'none';
+  renderTxModal();
+  document.getElementById('txOverlay').classList.add('open');
+}
+function closeTxModal(e) {
+  if (e && e.target !== document.getElementById('txOverlay')) return;
+  document.getElementById('txOverlay').classList.remove('open');
+}
+function txAccLabel(a) { return a === 'nisa' ? 'NISA' : '特定'; }
+function renderTxModal() {
+  const sel     = document.getElementById('txYearSelect');
+  const prevVal = sel.value;
+  const years   = [...new Set(transactions.map(t => (t.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  sel.innerHTML = `<option value="">全期間</option>` + years.map(y => `<option value="${y}">${y}年</option>`).join('');
+  if (prevVal === '' || years.includes(prevVal)) sel.value = prevVal;
+  const yf = sel.value;
+  const filtered = transactions
+    .filter(t => !yf || (t.date || '').slice(0, 4) === yf)
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  // サマリー
+  const allJPY      = sumRealizedJPY(transactions);
+  const periodJPY   = sumRealizedJPY(filtered);
+  const specificJPY = sumRealizedJPY(filtered.filter(t => (t.accountType || 'specific') !== 'nisa'));
+  const nisaJPY     = sumRealizedJPY(filtered.filter(t => t.accountType === 'nisa'));
+  const dividendJPY = sumDividendJPY(filtered);
+  const lab = yf ? `${yf}年` : '全期間';
+  const cards = [
+    ['累計実現損益', allJPY, 'pl'],
+    [`${lab} 実現損益`, periodJPY, 'pl'],
+    [`${lab} 特定口座`, specificJPY, 'pl'],
+    [`${lab} NISA`, nisaJPY, 'pl'],
+  ];
+  if (sumDividendJPY(transactions)) cards.push([`${lab} 配当金`, dividendJPY, 'div']);
+  document.getElementById('txSummary').innerHTML = cards.map(([l, v, kind]) => `
+    <div class="tx-sum-card">
+      <div class="tx-sum-label">${l}</div>
+      <div class="tx-sum-value ${kind === 'div' ? 'tx-type-div' : plClass(v)}">${kind === 'div' ? '+' : v >= 0 ? '+' : '-'}${fmtJPY(v)}</div>
+    </div>`).join('');
+
+  // テーブル
+  const tbody = document.getElementById('txTbody');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="9"><div class="tx-empty">取引記録がありません。<br>各銘柄の「売却」ボタン、または「＋ 手動で追加」から記録できます。</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(t => {
+    const isDiv  = t.type === 'dividend';
+    const isBuy  = t.type === 'buy';
+    const plJPY  = calcRealizedJPY(t);
+    const hasPL  = Number.isFinite(plJPY);
+    const label  = t.actionLabel || (isBuy ? '購入' : isDiv ? '配当' : '売却');
+    const labelCls = isDiv ? 'tx-type-div' : isBuy ? 'tx-type-buy' : 'tx-type-sell';
+    const srcTag = t.source === 'SBI' ? '<span class="badge badge-specific" style="margin-left:4px">SBI</span>' : '';
+    const plCell = isDiv
+      ? `<td class="tx-type-div">+${fmtJPY(t.dividendJPY || 0)}</td>`
+      : `<td class="${hasPL ? plClass(plJPY) : 'neutral'}">${hasPL ? (plJPY >= 0 ? '+' : '-') + fmtJPY(plJPY) : '—'}</td>`;
+    return `<tr>
+      <td>${esc(t.date || '')}</td>
+      <td><strong>${esc(t.ticker || '')}</strong>${srcTag}${t.name ? `<div class="ticker-name">${esc(t.name)}</div>` : ''}</td>
+      <td class="${labelCls}">${esc(label)}</td>
+      <td>${(t.quantity || 0).toLocaleString('ja-JP')} ${unitOf(t.market)}</td>
+      <td>${fmtPrice(t.price, t.currency)}</td>
+      <td>${t.avgCost != null ? fmtPrice(t.avgCost, t.avgCurrency || t.currency) : '—'}</td>
+      ${plCell}
+      <td>${txAccLabel(t.accountType)}</td>
+      <td><button class="btn-danger" onclick="deleteTx('${t.id}')">削除</button></td>
+    </tr>`;
+  }).join('');
+}
+function deleteTx(id) {
+  const idx = transactions.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  const removed = transactions[idx];
+  transactions.splice(idx, 1);
+  save(); render(); renderTxModal();
+  toast('取引記録を削除しました', 'success', {
+    label: '元に戻す',
+    onClick: () => {
+      transactions.splice(Math.min(idx, transactions.length), 0, removed);
+      save(); render(); renderTxModal();
+      toast('取引記録を復元しました', 'success');
+    },
+  });
+}
+function toggleTxManualForm() {
+  const f = document.getElementById('txManualForm');
+  const show = f.style.display === 'none';
+  f.style.display = show ? '' : 'none';
+  if (show) {
+    document.getElementById('mtDate').value = todayJST();
+    document.getElementById('mtType').value = 'sell';
+    onMtTypeChange();
+  }
+}
+function onMtTypeChange() {
+  const isBuy = document.getElementById('mtType').value === 'buy';
+  document.getElementById('mtPriceLabel').textContent = isBuy ? '購入単価 *' : '売却単価 *';
+  document.getElementById('mtAvgGroup').style.display = isBuy ? 'none' : '';
+}
+function addManualTx() {
+  const type     = document.getElementById('mtType').value;
+  const market   = document.getElementById('mtMarket').value;
+  const currency = getCurrency(market);
+  const ticker   = document.getElementById('mtTicker').value.trim().toUpperCase();
+  const name     = document.getElementById('mtName').value.trim();
+  const date     = document.getElementById('mtDate').value;
+  const qty      = parseFloat(document.getElementById('mtQty').value);
+  const price    = parseFloat(document.getElementById('mtPrice').value);
+  const avg      = parseFloat(document.getElementById('mtAvg').value);
+  const fee      = parseFloat(document.getElementById('mtFee').value) || 0;
+  const account  = document.getElementById('mtAccount').value;
+  const note     = document.getElementById('mtNote').value.trim();
+  const isBuy    = type === 'buy';
+  if (!ticker || !date || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) {
+    toast('ティッカー・日付・数量・単価を入力してください', 'error'); return;
+  }
+  if (!isBuy && !Number.isFinite(avg)) { toast('売却は取得単価が必要です', 'error'); return; }
+  let realizedPLJPY = null, realizedPL = null;
+  if (!isBuy) {
+    realizedPL    = price * qty - fee - avg * qty;
+    realizedPLJPY = Math.round(toJPY(price * qty, currency) - toJPY(fee, currency) - toJPY(avg * qty, currency));
+  }
+  transactions.push({
+    id: uid(), date, type, ticker, name, market, currency, avgCurrency: currency,
+    accountType: account, tradeType: 'spot',
+    quantity: qty, price, fee, avgCost: isBuy ? null : avg,
+    realizedPL, realizedPLJPY, rate: usdJpyRate, note, manual: true,
+  });
+  save(); render();
+  ['mtTicker', 'mtName', 'mtQty', 'mtPrice', 'mtAvg', 'mtNote'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('mtFee').value = 0;
+  renderTxModal();
+  toast(`${ticker} の${isBuy ? '購入' : '売却'}記録を追加しました`, 'success');
+}
+function exportRealizedCSV() {
+  if (!transactions.length) { toast('取引記録がありません', 'error'); return; }
+  const BOM = String.fromCharCode(0xFEFF); // Excel 文字化け防止
+
+  const headers = ['約定日', '区分', 'ティッカー', '銘柄名', '市場', '口座区分', '数量', '単価', '取得単価', '通貨', '手数料', '実現損益(円換算)', '配当(円)', 'メモ'];
+  const tradeLabel   = { sell: '売却', buy: '購入', dividend: '配当' };
+  const accountLabel = { specific: '特定口座', nisa: 'NISA' };
+  const marketLabel  = { JP: '日本株', US: '米国株', FUND: '投資信託', CRYPTO: '暗号資産' };
+  const rows = transactions
+    .slice()
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+    .map(t => {
+      const pl = calcRealizedJPY(t);
+      return [
+        t.date || '', t.actionLabel || tradeLabel[t.type] || t.type, t.ticker || '', t.name || '',
+        marketLabel[t.market] || t.market, accountLabel[t.accountType] || t.accountType || '特定口座',
+        t.quantity, t.price, t.avgCost != null ? t.avgCost : '', t.currency || '',
+        t.fee || 0, Number.isFinite(pl) ? Math.round(pl) : '',
+        t.type === 'dividend' && Number.isFinite(t.dividendJPY) ? Math.round(t.dividendJPY) : '', t.note || '',
+      ];
+    });
+  const csv = [headers, ...rows].map(row => row.map(cell => {
+    const v = String(cell ?? '');
+    return v.includes(',') || v.includes('"') || v.includes('\n') ? `"${v.replace(/"/g, '""')}"` : v;
+  }).join(',')).join('\r\n');
+  const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `realized_pl_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('実現損益CSVをエクスポートしました', 'success');
+}
+
+// ── SBI 約定履歴の取込 ─────────────────────────────────────────────
+// 列名を自動判定するため、SBIの形式差（現物/信用/投信/外国株）に強い。
+const SBI_TX_KEYWORDS = {
+  date:       ['約定日', '決済日'],          // 約定履歴=約定日 / 信用決済明細=決済日
+  code:       ['銘柄コード', 'コード'],
+  name:       ['銘柄', 'ファンド'],
+  market:     ['市場'],                       // 決済市場/市場（建市場より先に取る）
+  action:     ['取引'],
+  term:       ['期限'],
+  account:    ['預り'],
+  tax:        ['課税'],
+  qty:        ['約定数量', '決済数量', '数量', '口数', '株数'],
+  closePrice: ['決済単価'],                   // 信用決済明細: 返済（決済）価格
+  openPrice:  ['建単価'],                     // 信用決済明細: 建単価＝取得単価
+  price:      ['約定単価', '単価', '基準価'],
+  totalFee:   ['諸費用計', '諸費用'],         // 信用決済明細の手数料・金利等の合計
+  fee:        ['手数料', '諸経費', '費用'],
+  taxAmt:     ['税額'],
+  proceeds:   ['売却/決済金額', '売却金額'],   // 特定口座損益明細: 売却/決済金額
+  acqAmount:  ['取得/新規金額', '取得金額'],   // 特定口座損益明細: 取得金額（取得単価の算出に使用）
+  settleDate: ['受渡日'],
+  settle:     ['損益金額', '受渡金額', '決済損益', '損益'],
+  ccy:        ['通貨'],
+  fx:         ['為替', 'レート'],
+};
+function detectSbiColumns(headers) {
+  const map = {}; const consumed = new Set();
+  Object.keys(SBI_TX_KEYWORDS).forEach(k => map[k] = -1);
+  // code を name より先に処理して「銘柄コード」を先取りさせる
+  Object.entries(SBI_TX_KEYWORDS).forEach(([k, kws]) => {
+    for (let i = 0; i < headers.length; i++) {
+      if (consumed.has(i)) continue;
+      if (kws.some(kw => headers[i].includes(kw))) { map[k] = i; consumed.add(i); break; }
+    }
+  });
+  return map;
+}
+function _sbiNum(s) {
+  if (s == null) return null;
+  const t = String(s).replace(/[,\s円株口]/g, '');
+  if (t === '' || t === '--' || t === '―' || t === '-' || t === '−') return null;
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+}
+function _sbiDate(s) {
+  const m = String(s || '').match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+  return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : '';
+}
+function _sbiAccount(s) { return /NISA|ＮＩＳＡ/i.test(String(s || '')) ? 'nisa' : 'specific'; }
+// 通貨列（外国株は「米国ドル」等の日本語表記）→ 'USD' | 'JPY' | null
+function _sbiCurrency(s) {
+  const t = String(s || '');
+  if (/米国ドル|米ドル|USD|ＵＳＤ/i.test(t)) return 'USD';
+  if (/日本円|円|JPY|ＪＰＹ/i.test(t)) return 'JPY';
+  return null;
+}
+// 外国株の銘柄名「<名称> <TICKER> / <取引所>」からティッカーと名称を分離
+function _sbiParseForeignName(raw) {
+  const name0 = String(raw || '').normalize('NFKC');
+  const slash = name0.search(/\s*\/\s*/);
+  const left  = (slash >= 0 ? name0.slice(0, slash) : name0).trim();
+  const tokens = left.split(/\s+/);
+  const last  = tokens[tokens.length - 1] || '';
+  const isTicker = /^[A-Z][A-Z0-9.\-]{0,9}$/.test(last);
+  return {
+    ticker: isTicker ? last : '',
+    name:   isTicker ? tokens.slice(0, -1).join(' ') : left,
+  };
+}
+
+// Shift_JIS を優先デコード。置換文字が多ければ UTF-8 にフォールバック。
+function decodeSbiBuffer(buf) {
+  let sjis = '', utf8 = '';
+  try { sjis = new TextDecoder('shift-jis', { fatal: false }).decode(buf); } catch (e) {}
+  try { utf8 = new TextDecoder('utf-8',  { fatal: false }).decode(buf); } catch (e) {}
+  if (!sjis) return utf8;
+  const badSjis = (sjis.match(/�/g) || []).length;
+  const badUtf8 = (utf8.match(/�/g) || []).length;
+  return (utf8 && badUtf8 < badSjis) ? utf8 : sjis;
+}
+
+function classifySbiRow(get, occ, col) {
+  // 約定日が無ければ受渡日で代替（特定口座損益明細の米株信用は約定日が ----/--/--）
+  const date = _sbiDate(get('date')) || _sbiDate(get('settleDate'));
+  if (!date) return null;
+  const action  = get('action');
+  if (!action) return null;                            // 税金行（譲渡益税徴収額 等）は取引欄が空 → スキップ
+  const isPLDetail = !!(col && col.acqAmount >= 0);    // 特定口座損益明細（取得金額の列がある＝損益が直接記載）
+
+  const code      = get('code');
+  const nameRaw   = get('name');
+  let   name      = nameRaw.normalize('NFKC').trim();
+  const marketRaw = get('market');
+  const qty       = _sbiNum(get('qty'));
+  const settleRaw = get('settle');
+  const settleVal = _sbiNum(settleRaw);
+  const account   = _sbiAccount(get('account'));
+
+  const isMargin   = action.includes('信用');
+  const isDividend = action.includes('配当');
+  const ccyFromCol = _sbiCurrency(get('ccy'));
+  const isForeign  = ccyFromCol === 'USD' || action.includes('外国') || action.includes('米株')
+                  || /外国|米国|ナスダック|ＮＡＳＤＡＱ|NASDAQ|NYSE|ＮＹＳＥ|ARCA|CBOE/i.test(marketRaw + ' ' + (isPLDetail ? '' : nameRaw));
+  const isFund = !isForeign && (action.includes('投信') || action.includes('ファンド')
+                 || (!code && !marketRaw && !isMargin && !isPLDetail && ccyFromCol !== 'USD'));
+
+  // 価格・取得単価・損益・配当・手数料
+  let price, avgCost, realizedPLJPY = null, dividendJPY = null, fee, type, currency = 'JPY';
+
+  if (isPLDetail) {
+    // 特定口座損益明細: 金額は全て円。損益金額がそのまま実現損益。
+    const proceeds = _sbiNum(get('proceeds'));
+    const acq      = _sbiNum(get('acqAmount'));
+    fee     = _sbiNum(get('fee')) || 0;
+    price   = (Number.isFinite(proceeds) && qty) ? proceeds / qty : null;  // 円換算の約定単価
+    avgCost = (Number.isFinite(acq)      && qty) ? acq      / qty : null;  // 円換算の取得単価
+    if (isDividend) { type = 'dividend'; dividendJPY = settleVal; price = null; avgCost = null; }
+    else            { type = 'sell';     realizedPLJPY = settleVal; }       // 信用返済売/現渡/外国株式売/米株信用返済売/投信解約=全て決済
+  } else {
+    // 既存3形式（約定履歴照会 / 外国株約定 / 信用決済明細）
+    let p = _sbiNum(get('closePrice'));                 // 信用決済明細=決済単価
+    if (!Number.isFinite(p)) p = _sbiNum(get('price'));
+    price = p;
+    avgCost = _sbiNum(get('openPrice'));                // 信用決済明細=建単価＝取得単価
+    const feeTotal = _sbiNum(get('totalFee'));
+    fee = Number.isFinite(feeTotal) ? feeTotal : (_sbiNum(get('fee')) || 0);
+    if (action.includes('返済') || action.includes('解約')) {
+      type = 'sell';
+      if (isMargin && Number.isFinite(settleVal)) realizedPLJPY = settleVal; // 信用の決済損益
+    } else if (action.includes('新規')) {
+      type = 'buy';                                     // 信用新規買/売＝建玉（取得扱い）
+    } else if (action.includes('売')) {
+      type = 'sell';                                    // 現物売・外国株売却（取得単価不明）
+    } else {
+      type = 'buy';                                     // 現物買・買付 等
+    }
+  }
+
+  // 市場・通貨・ティッカー
+  let market = 'JP', ticker = code || '';
+  if (isForeign) {
+    market = 'US';
+    // 特定口座損益明細は円換算済みなので JPY のまま。外国株約定ファイルのみ USD。
+    if (!isPLDetail) {
+      currency = 'USD';
+      if (!ticker) { const pf = _sbiParseForeignName(nameRaw); if (pf.ticker) { ticker = pf.ticker; name = pf.name || name; } }
+    }
+  } else if (isFund) {
+    market = 'FUND';
+    if (!isPLDetail && Number.isFinite(price))   price   = price   / 10000; // 投信の約定単価は円/万口 → 円/口
+    if (!isPLDetail && Number.isFinite(avgCost)) avgCost = avgCost / 10000;
+  }
+
+  // 重複判定キー（同一内容の複数約定も区別するため出現回数を付与）
+  const baseKey    = [date, ticker || name, action, qty, price, settleRaw].join('|');
+  occ[baseKey]     = (occ[baseKey] || 0) + 1;
+  const importHash = baseKey + '#' + occ[baseKey];
+
+  return {
+    id: uid(), date, type,
+    ticker, name, market, currency, avgCurrency: currency,
+    accountType: account, tradeType: isMargin ? 'margin' : 'spot',
+    quantity: qty, price, fee, avgCost: Number.isFinite(avgCost) ? avgCost : null,
+    realizedPL: null, realizedPLJPY, dividendJPY, rate: usdJpyRate,
+    actionLabel: action, note: '', source: 'SBI', importHash,
+  };
+}
+
+function parseSbiText(text) {
+  const lines = text.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (ln.includes('取引') && (ln.includes('約定日') || ln.includes('決済日'))) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return { rows: [], headers: null };
+  const hl    = lines[headerIdx];
+  const delim = hl.split('\t').length > hl.split(',').length ? '\t' : ',';
+  const split = (l) => delim === '\t' ? l.split('\t') : parseCSVRow(l);
+  const headers = split(hl).map(h => h.trim());
+  const col = detectSbiColumns(headers);
+  if (col.date < 0 || col.action < 0) return { rows: [], headers };
+  const rows = [], occ = {};
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const cells = split(lines[i]);
+    const get = (k) => col[k] >= 0 ? String(cells[col[k]] ?? '').trim() : '';
+    const tx = classifySbiRow(get, occ, col);
+    if (tx) rows.push(tx);
+  }
+  return { rows, headers, col };
+}
+
+let _sbiPending = [];
+function openSbiImport() { document.getElementById('sbiFileInput').click(); }
+function handleSbiFile(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // 同じファイルを再選択できるようにクリア
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = parseSbiText(decodeSbiBuffer(reader.result));
+      if (!parsed.rows.length) { toast('取引明細が見つかりませんでした。SBIの約定履歴CSVかご確認ください', 'error'); return; }
+      buildSbiPreview(parsed);
+    } catch (err) { console.error('SBI parse error:', err); toast('CSVの解析に失敗しました', 'error'); }
+  };
+  reader.onerror = () => toast('ファイルの読込に失敗しました', 'error');
+  reader.readAsArrayBuffer(file);
+}
+// 形式に依存しない重複判定キー。
+// 実現損益のある決済（信用返済/外国株売/投信解約など）と配当は「約定日・銘柄・数量・損益額」で識別するため、
+// 別形式（特定口座損益明細／信用決済明細／約定履歴照会）で取り込んでも同じ取引は重複として弾ける。
+// 損益が無い明細（建玉・買付・取得単価不明の売り）は形式固有の importHash で識別する。
+function txDupKey(t) {
+  if (t.type === 'dividend' && Number.isFinite(t.dividendJPY))
+    return 'D|' + [t.date, t.ticker || t.name, Math.round(t.dividendJPY)].join('|');
+  if (t.type === 'sell' && Number.isFinite(t.realizedPLJPY))
+    return 'R|' + [t.date, t.ticker || t.name, t.quantity, Math.round(t.realizedPLJPY)].join('|');
+  return 'H|' + (t.importHash || t.id);
+}
+// 取引履歴を端末間でマージ（和集合）。同一取引（txDupKey一致）は1件にまとめ、
+// 取得単価・配当など欠けている項目を補完する。これにより端末間で取引を失わない。
+function mergeTransactions(localTx, cloudTx) {
+  const map = new Map();
+  const add = t => {
+    if (!t) return;
+    const k  = txDupKey(t);
+    const ex = map.get(k);
+    if (!ex) { map.set(k, t); return; }
+    if (ex.avgCost == null && Number.isFinite(t.avgCost)) ex.avgCost = t.avgCost;
+    if (ex.dividendJPY == null && Number.isFinite(t.dividendJPY)) ex.dividendJPY = t.dividendJPY;
+  };
+  (Array.isArray(cloudTx) ? cloudTx : []).forEach(add);
+  (Array.isArray(localTx)  ? localTx  : []).forEach(add);
+  return [...map.values()];
+}
+function buildSbiPreview(parsed) {
+  // 既存取引を重複キーごとにまとめる（同一キーが複数ある＝同内容の約定が複数）
+  const existingByKey = new Map();
+  transactions.forEach(t => {
+    const k = txDupKey(t);
+    if (!existingByKey.has(k)) existingByKey.set(k, []);
+    existingByKey.get(k).push(t);
+  });
+  const used = new Map(); // 取込内で消費した重複キーの数
+  _sbiPending = parsed.rows.map(tx => {
+    const k      = txDupKey(tx);
+    const bucket = existingByKey.get(k) || [];
+    const u      = used.get(k) || 0;
+    const match  = u < bucket.length ? bucket[u] : null; // 既存に同一取引があれば重複
+    used.set(k, u + 1);
+    const isNew  = !match;
+    // 重複でも、既存に取得単価が無く今回はあるなら補完対象にする（別形式からの取得単価補完にも対応）
+    const enrich = (match && match.avgCost == null && Number.isFinite(tx.avgCost)) ? match : null;
+    return { tx, isNew, enrich };
+  });
+  const total       = _sbiPending.length;
+  const newOnes     = _sbiPending.filter(m => m.isNew);
+  const newCount    = newOnes.length;
+  const enrichCount = _sbiPending.filter(m => m.enrich).length;
+  const realized    = sumRealizedJPY(newOnes.map(m => m.tx));
+  const dividend    = sumDividendJPY(newOnes.map(m => m.tx));
+  document.getElementById('sbiImportSummary').innerHTML =
+    `総明細 <strong>${total}</strong> 件 ／ 新規 <strong style="color:var(--green)">${newCount}</strong> 件 ／ ` +
+    `重複スキップ <strong style="color:var(--yellow)">${total - newCount}</strong> 件` +
+    (enrichCount ? `（うち取得単価を補完 <strong style="color:var(--accent)">${enrichCount}</strong> 件）` : '') +
+    `　|　新規分の確定実現損益: <strong class="${plClass(realized)}">${realized >= 0 ? '+' : '-'}${fmtJPY(realized)}</strong>` +
+    (dividend ? `　|　配当: <strong style="color:var(--accent)">+${fmtJPY(dividend)}</strong>` : '');
+  document.getElementById('sbiImportColInfo').textContent =
+    '認識した列: ' + (parsed.headers ? parsed.headers.filter(Boolean).join(' / ') : '');
+  document.getElementById('sbiPreviewTable').innerHTML =
+    `<thead><tr><th>約定日</th><th>銘柄</th><th>取引</th><th>数量</th><th>単価</th><th>実現損益</th><th>口座</th><th></th></tr></thead>` +
+    `<tbody>${_sbiPending.map(({ tx, isNew, enrich }) => {
+      const isDiv = tx.type === 'dividend';
+      const pl = calcRealizedJPY(tx), hasPL = Number.isFinite(pl);
+      const labelCls = isDiv ? 'tx-type-div' : tx.type === 'sell' ? 'tx-type-sell' : 'tx-type-buy';
+      const plCell = isDiv
+        ? `<td class="tx-type-div">+${fmtJPY(tx.dividendJPY || 0)}</td>`
+        : `<td class="${hasPL ? plClass(pl) : 'neutral'}">${hasPL ? (pl >= 0 ? '+' : '-') + fmtJPY(pl) : '—'}</td>`;
+      const badge = isNew ? '<span style="color:var(--green)">新規</span>'
+                  : enrich ? '<span style="color:var(--accent)">補完</span>'
+                  : '<span style="color:var(--yellow)">重複</span>';
+      return `<tr style="${isNew || enrich ? '' : 'opacity:0.4'}">
+        <td>${esc(tx.date)}</td>
+        <td><strong>${esc(tx.ticker || '')}</strong><div class="ticker-name">${esc(tx.name)}</div></td>
+        <td class="${labelCls}">${esc(tx.actionLabel)}</td>
+        <td>${(tx.quantity || 0).toLocaleString('ja-JP')}</td>
+        <td>${fmtPrice(tx.price, tx.currency)}</td>
+        ${plCell}
+        <td>${txAccLabel(tx.accountType)}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('')}</tbody>`;
+  const btn = document.getElementById('sbiImportConfirmBtn');
+  btn.disabled    = newCount === 0 && enrichCount === 0;
+  btn.textContent = newCount ? `${newCount}件を取込${enrichCount ? `＋${enrichCount}件補完` : ''}`
+                  : enrichCount ? `${enrichCount}件に取得単価を補完`
+                  : '取込する明細なし';
+  document.getElementById('sbiImportOverlay').classList.add('open');
+}
+function closeSbiImport(e) {
+  if (e && e.target !== document.getElementById('sbiImportOverlay')) return;
+  document.getElementById('sbiImportOverlay').classList.remove('open');
+  _sbiPending = [];
+}
+function confirmSbiImport() {
+  const toAdd   = _sbiPending.filter(m => m.isNew).map(m => m.tx);
+  const enrich  = _sbiPending.filter(m => m.enrich);
+  if (!toAdd.length && !enrich.length) { toast('取込する新規明細がありません', 'error'); return; }
+  // 既存明細に取得単価（建単価）を補完
+  enrich.forEach(({ tx, enrich: e }) => { e.avgCost = tx.avgCost; if (!e.fee && tx.fee) e.fee = tx.fee; });
+  if (toAdd.length) transactions.push(...toAdd);
+  save(); render();
+  closeSbiImport();
+  if (document.getElementById('txOverlay').classList.contains('open')) renderTxModal();
+  toast(`SBIから${toAdd.length}件を取込` + (enrich.length ? `／${enrich.length}件に取得単価を補完` : ''), 'success');
 }
 
 // ── インポート ────────────────────────────────────────────────────
