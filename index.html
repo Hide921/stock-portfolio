@@ -418,7 +418,7 @@
       <div class="card-sub" id="dayPLPct">0.00%</div>
     </div>
     <div class="card" id="totalInvestCard" style="display:none">
-      <div class="card-label">総投資額 (現物+信用)</div>
+      <div class="card-label">総投資額 (現物+信用 / 時価)</div>
       <div class="card-value" id="totalInvestValue">¥0</div>
       <div class="card-sub" id="totalInvestSub">-</div>
     </div>
@@ -2509,13 +2509,13 @@ function render() {
   dayEl.className   = 'card-value ' + plClass(allDayPLJPY);
   document.getElementById('dayPLPct').textContent = pctStr(dayPLPct);
 
-  // 総投資額カード（現物+信用）
+  // 総投資額カード（現物+信用、いずれも時価ベース）
   document.getElementById('totalInvestCard').style.display = hasMargin ? '' : 'none';
   if (hasMargin) {
-    const totalInvest = totalCostJPY + marginCostJPY;
+    const totalInvest = totalValueJPY + marginValueJPY;
     document.getElementById('totalInvestValue').textContent = fmtJPY(totalInvest);
     document.getElementById('totalInvestSub').textContent =
-      `現物: ${fmtJPY(totalCostJPY)} | 信用: ${fmtJPY(marginCostJPY)}`;
+      `現物: ${fmtJPY(totalValueJPY)} | 信用: ${fmtJPY(marginValueJPY)}`;
   }
 
   // 信用損益カード
