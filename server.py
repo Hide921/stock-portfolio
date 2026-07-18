@@ -3,16 +3,20 @@ import sys
 import re
 import json
 import math
+import tempfile
 import secrets
 import logging
 import threading
 import webbrowser
 import concurrent.futures
+from collections import deque
+from calendar import monthrange
+from functools import lru_cache
 from html import unescape as html_unescape
 from urllib.parse import urlparse
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -1076,11 +1080,83 @@ def get_fund_history_yfjp(fund_code: str, period: str) -> list:
         return []
 
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path='/static')
-CORS(app)  # 全オリジン許可（公開株価データのため問題なし）
+
+# 公開フロントとローカル開発環境だけに CORS を許可する。追加オリジンは環境変数で拡張可能。
+_cors_origins = [
+    'https://hide921.github.io',
+    r'http://localhost(?::\d+)?',
+    r'http://127\.0\.0\.1(?::\d+)?',
+]
+_cors_origins.extend(
+    origin.strip() for origin in os.getenv('CORS_ORIGINS', '').split(',') if origin.strip()
+)
+CORS(app, resources={r'/api/*': {'origins': _cors_origins}}, supports_credentials=False)
+
+# 公開 API の過負荷防止。Render は X-Forwarded-For を付与するため先頭 IP を使用する。
+API_RATE_WINDOW_SEC = 60
+API_RATE_LIMIT = int(os.getenv('API_RATE_LIMIT', '90'))
+MAX_TICKERS_PER_REQUEST = int(os.getenv('MAX_TICKERS_PER_REQUEST', '64'))
+_TICKER_RE = re.compile(r'^[A-Z0-9^=._-]{1,32}$')
+_rate_buckets: dict[str, deque] = {}
+_rate_lock = threading.Lock()
+
+
+def _client_ip() -> str:
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return (forwarded.split(',', 1)[0].strip() if forwarded else request.remote_addr) or 'unknown'
+
+
+@app.before_request
+def _limit_public_api():
+    if request.method == 'OPTIONS' or not request.path.startswith('/api/') or request.path == '/api/health':
+        return None
+    now = time.time()
+    ip = _client_ip()
+    with _rate_lock:
+        bucket = _rate_buckets.setdefault(ip, deque())
+        while bucket and bucket[0] <= now - API_RATE_WINDOW_SEC:
+            bucket.popleft()
+        if len(bucket) >= API_RATE_LIMIT:
+            retry_after = max(1, math.ceil(API_RATE_WINDOW_SEC - (now - bucket[0])))
+            response = jsonify({'error': 'リクエストが多すぎます。少し待ってから再試行してください。'})
+            response.status_code = 429
+            response.headers['Retry-After'] = str(retry_after)
+            return response
+        bucket.append(now)
+        # 長時間稼働時の不要な IP エントリを抑制する。
+        if len(_rate_buckets) > 1000:
+            stale_ips = [key for key, values in _rate_buckets.items() if not values or values[-1] <= now - API_RATE_WINDOW_SEC]
+            for key in stale_ips[:500]:
+                _rate_buckets.pop(key, None)
+    return None
+
+
+def _parse_tickers(raw: str):
+    """ティッカーを正規化・重複排除し、公開 API の安全な上限を適用する。"""
+    seen = set()
+    tickers = []
+    for value in raw.split(','):
+        ticker = value.strip().upper()
+        if not ticker or ticker in seen:
+            continue
+        if not _TICKER_RE.fullmatch(ticker):
+            return None, f'無効なティッカーです: {ticker[:32]}'
+        seen.add(ticker)
+        tickers.append(ticker)
+    if not tickers:
+        return None, 'tickersパラメータが必要です'
+    if len(tickers) > MAX_TICKERS_PER_REQUEST:
+        return None, f'一度に取得できる銘柄は{MAX_TICKERS_PER_REQUEST}件までです'
+    return tickers, None
 
 # ── In-memory cache (レート制限対策) ──────────────────────────────
 _price_cache: dict = {}   # ticker -> {'data': {...}, 'ts': float}
 _hist_cache:  dict = {}   # (ticker, period) -> {'data': [...], 'ts': float}
+_price_cache_lock = threading.RLock()
+_cache_write_scheduled = False
+PRICE_CACHE_FILE = os.getenv(
+    'PRICE_CACHE_FILE', os.path.join(tempfile.gettempdir(), 'stock-portfolio-price-cache.json')
+)
 PRICE_CACHE_TTL = 300     # 5分（フォールバック）
 HIST_CACHE_TTL  = 600     # 10分
 
@@ -1097,21 +1173,129 @@ TTL_OFF_HOURS     = 900
 TTL_FUND          = 3600
 TTL_CRYPTO        = 60
 
+
+def _market_now(zone_name: str):
+    """zoneinfo データが無いローカル環境でも市場時刻を返す。"""
+    if ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(zone_name))
+        except Exception:
+            pass
+    utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if zone_name == 'Asia/Tokyo':
+        return utc + timedelta(hours=9)
+    # America/New_York: 3月第2日曜 07:00 UTC〜11月第1日曜 06:00 UTC が夏時間。
+    year = utc.year
+    march_sunday = _nth_weekday(year, 3, 6, 2)
+    november_sunday = _nth_weekday(year, 11, 6, 1)
+    dst_start = datetime(year, 3, march_sunday, 7)
+    dst_end = datetime(year, 11, november_sunday, 6)
+    return utc + timedelta(hours=-4 if dst_start <= utc < dst_end else -5)
+
+
+def _nth_weekday(year: int, month: int, weekday: int, nth: int) -> int:
+    first_weekday = datetime(year, month, 1).weekday()
+    return 1 + (weekday - first_weekday) % 7 + (nth - 1) * 7
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> int:
+    last_day = monthrange(year, month)[1]
+    return last_day - (datetime(year, month, last_day).weekday() - weekday) % 7
+
+
+def _observed_us_holiday(year: int, month: int, day: int):
+    from datetime import timedelta
+    holiday = datetime(year, month, day).date()
+    if holiday.weekday() == 5:
+        return holiday - timedelta(days=1)
+    if holiday.weekday() == 6:
+        return holiday + timedelta(days=1)
+    return holiday
+
+
+def _easter_sunday(year: int):
+    """Gregorian Easter (Meeus/Jones/Butcher)。Good Friday 判定に使用。"""
+    from datetime import date
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+@lru_cache(maxsize=16)
+def _us_market_holidays(year: int):
+    from datetime import date, timedelta
+    holidays = {
+        _observed_us_holiday(year, 1, 1),
+        date(year, 1, _nth_weekday(year, 1, 0, 3)),   # MLK Day
+        date(year, 2, _nth_weekday(year, 2, 0, 3)),   # Presidents Day
+        _easter_sunday(year) - timedelta(days=2),      # Good Friday
+        date(year, 5, _last_weekday(year, 5, 0)),     # Memorial Day
+        _observed_us_holiday(year, 6, 19),
+        _observed_us_holiday(year, 7, 4),
+        date(year, 9, _nth_weekday(year, 9, 0, 1)),   # Labor Day
+        date(year, 11, _nth_weekday(year, 11, 3, 4)), # Thanksgiving
+        _observed_us_holiday(year, 12, 25),
+    }
+    # 翌年元日が土曜なら、当年12/31が振替休場になる。
+    holidays.add(_observed_us_holiday(year + 1, 1, 1))
+    return holidays
+
+
+@lru_cache(maxsize=16)
+def _jp_national_holidays(year: int):
+    """2000〜2099年の通常ルール。振替休日と国民の休日も生成する。"""
+    from datetime import date, timedelta
+    vernal = int(20.8431 + 0.242194 * (year - 1980) - ((year - 1980) // 4))
+    autumn = int(23.2488 + 0.242194 * (year - 1980) - ((year - 1980) // 4))
+    holidays = {
+        date(year, 1, 1),
+        date(year, 1, _nth_weekday(year, 1, 0, 2)),
+        date(year, 2, 11), date(year, 2, 23), date(year, 3, vernal),
+        date(year, 4, 29), date(year, 5, 3), date(year, 5, 4), date(year, 5, 5),
+        date(year, 7, _nth_weekday(year, 7, 0, 3)), date(year, 8, 11),
+        date(year, 9, _nth_weekday(year, 9, 0, 3)), date(year, 9, autumn),
+        date(year, 10, _nth_weekday(year, 10, 0, 2)), date(year, 11, 3), date(year, 11, 23),
+    }
+    # 日曜の祝日は、次の平日（既存祝日でない日）へ振替。
+    for holiday in sorted(list(holidays)):
+        if holiday.weekday() == 6:
+            substitute = holiday + timedelta(days=1)
+            while substitute in holidays:
+                substitute += timedelta(days=1)
+            holidays.add(substitute)
+    # 祝日に挟まれた平日は国民の休日。
+    day = date(year, 1, 2)
+    end = date(year, 12, 30)
+    while day <= end:
+        if day not in holidays and day.weekday() < 5 and day - timedelta(days=1) in holidays and day + timedelta(days=1) in holidays:
+            holidays.add(day)
+        day += timedelta(days=1)
+    return holidays
+
 def _is_jp_market_open(now=None):
-    if ZoneInfo is None:
-        return True  # フォールバック
-    n = now or datetime.now(ZoneInfo('Asia/Tokyo'))
+    n = now or _market_now('Asia/Tokyo')
     if n.weekday() >= 5:  # 土日
+        return False
+    if n.date() in _jp_national_holidays(n.year) or (n.month == 1 and n.day in (2, 3)) or (n.month == 12 and n.day == 31):
         return False
     minutes = n.hour * 60 + n.minute
     # 9:00-11:30 (前場) または 12:30-15:30 (後場)
     return (540 <= minutes < 690) or (750 <= minutes < 930)
 
 def _is_us_market_open(now=None):
-    if ZoneInfo is None:
-        return True
-    n = now or datetime.now(ZoneInfo('America/New_York'))
+    n = now or _market_now('America/New_York')
     if n.weekday() >= 5:
+        return False
+    if n.date() in _us_market_holidays(n.year):
         return False
     minutes = n.hour * 60 + n.minute
     # 9:30-16:00 ET
@@ -1145,7 +1329,9 @@ def _get_price_ttl(ticker: str) -> int:
 def _store_price(ticker: str, data: dict):
     # cache_age_sec / stale はキャッシュ自体には保存しない（_cached_price で都度計算）
     clean = {k: v for k, v in data.items() if k not in ('cache_age_sec', 'stale')}
-    _price_cache[ticker] = {'data': clean, 'ts': time.time()}
+    with _price_cache_lock:
+        _price_cache[ticker] = {'data': clean, 'ts': time.time()}
+    _schedule_price_cache_write()
 
 # ── Stale-While-Revalidate (SWR) ──────────────────────────────────
 # TTL を超えても 2倍までは古いキャッシュを即返し、裏でバックグラウンド更新する。
@@ -1155,6 +1341,72 @@ STALE_GRACE_MULTIPLIER = 2  # 総キャッシュ寿命 = TTL × 2
 # 多重バックグラウンド取得を抑止
 _refresh_in_flight: set = set()
 _refresh_lock = threading.Lock()
+
+
+def _persist_price_cache():
+    global _cache_write_scheduled
+    try:
+        with _price_cache_lock:
+            payload = {'version': 1, 'saved_at': time.time(), 'prices': dict(_price_cache)}
+        directory = os.path.dirname(PRICE_CACHE_FILE) or '.'
+        os.makedirs(directory, exist_ok=True)
+        tmp_path = PRICE_CACHE_FILE + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, ensure_ascii=False, separators=(',', ':'))
+        os.replace(tmp_path, PRICE_CACHE_FILE)
+    except Exception as exc:
+        logging.warning(f'PRICE cache persist failed: {exc}')
+    finally:
+        with _price_cache_lock:
+            _cache_write_scheduled = False
+
+
+def _schedule_price_cache_write():
+    global _cache_write_scheduled
+    with _price_cache_lock:
+        if _cache_write_scheduled:
+            return
+        _cache_write_scheduled = True
+    def worker():
+        time.sleep(0.4)  # 同一バッチ内の複数銘柄を1回の書き込みにまとめる
+        _persist_price_cache()
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _load_price_cache():
+    try:
+        with open(PRICE_CACHE_FILE, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+        now = time.time()
+        loaded = payload.get('prices', {}) if isinstance(payload, dict) else {}
+        valid = {
+            ticker: entry for ticker, entry in loaded.items()
+            if _TICKER_RE.fullmatch(ticker)
+            and isinstance(entry, dict)
+            and isinstance(entry.get('data'), dict)
+            and isinstance(entry.get('ts'), (int, float))
+            and 0 <= now - entry['ts'] <= 24 * 60 * 60
+        }
+        with _price_cache_lock:
+            _price_cache.update(valid)
+        if valid:
+            logging.info(f'PRICE cache restored: {len(valid)} tickers')
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logging.warning(f'PRICE cache restore failed: {exc}')
+
+
+def _last_known_price(ticker: str, max_age: int = 24 * 60 * 60):
+    """上流障害時だけ使う期限切れキャッシュ。必ず stale と年齢を付ける。"""
+    with _price_cache_lock:
+        entry = _price_cache.get(ticker)
+        if not entry:
+            return None
+        age = time.time() - entry['ts']
+        if age < 0 or age > max_age:
+            return None
+        return {**entry['data'], 'cache_age_sec': round(age, 1), 'stale': True, 'cache_fallback': True}
 
 def _trigger_background_refresh(ticker: str):
     with _refresh_lock:
@@ -1183,7 +1435,8 @@ def _cached_price(ticker: str):
     - TTL ≤ age < 2×TTL: stale → 即返しつつ裏で更新
     - 2×TTL ≤ age:      None（呼び出し側でフレッシュ取得）
     """
-    entry = _price_cache.get(ticker)
+    with _price_cache_lock:
+        entry = _price_cache.get(ticker)
     if not entry:
         return None
     age = time.time() - entry['ts']
@@ -1194,6 +1447,9 @@ def _cached_price(ticker: str):
         _trigger_background_refresh(ticker)
         return {**entry['data'], 'cache_age_sec': round(age, 1), 'stale': True}
     return None
+
+
+_load_price_cache()
 
 def _cached_hist(ticker: str, period: str):
     entry = _hist_cache.get((ticker, period))
@@ -1552,11 +1808,9 @@ def get_prices():
     US/JP は別ドメインなのでプールを分け独立並列実行。
     失敗した銘柄は 2 秒待機後に 1 回だけ自動リトライする。
     """
-    tickers_param = request.args.get('tickers', '').strip()
-    if not tickers_param:
-        return jsonify({'error': 'tickersパラメータが必要です'}), 400
-
-    tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
+    tickers, parse_error = _parse_tickers(request.args.get('tickers', ''))
+    if parse_error:
+        return jsonify({'error': parse_error}), 400
 
     # ── Step 0: キャッシュ優先 ──
     result: dict = {}
@@ -1632,10 +1886,14 @@ def get_prices():
         else:
             failed = permanent
 
-    # 失敗したティッカーはエラー構造体で埋める
+    # 上流障害時は24時間以内の最終成功値を返す。古い値であることは明示する。
     for t, msg in failed.items():
         if t not in result:
-            result[t] = {'price': None, 'prev_close': None, 'day_change': None, 'currency': None, 'error': msg}
+            fallback = _last_known_price(t)
+            result[t] = fallback or {
+                'price': None, 'prev_close': None, 'day_change': None,
+                'currency': None, 'error': msg,
+            }
 
     return jsonify(result)
 
@@ -1647,16 +1905,14 @@ def get_history():
     period: 5d | 1mo | 3mo | 6mo | 1y | 2y | 5y
     USDJPY=X の履歴も自動付加して返す。
     """
-    tickers_param = request.args.get('tickers', '').strip()
     period        = request.args.get('period', '1mo')
 
     if period not in VALID_PERIODS:
         period = '1mo'
-    if not tickers_param:
-        return jsonify({'error': 'tickersが必要です'}), 400
-
-    tickers   = [t.strip() for t in tickers_param.split(',') if t.strip()]
-    fetch_set = list(set(tickers + ['USDJPY=X']))
+    tickers, parse_error = _parse_tickers(request.args.get('tickers', ''))
+    if parse_error:
+        return jsonify({'error': parse_error}), 400
+    fetch_set = list(dict.fromkeys(tickers + ['USDJPY=X']))
     result    = {}
 
     need_fetch = []
@@ -1715,9 +1971,11 @@ def get_name():
     GET /api/name?ticker=03319172.T
     銘柄名を返す。日本株・投資信託は Yahoo Finance Japan の日本語名を優先する。
     """
-    ticker = request.args.get('ticker', '').strip()
+    ticker = request.args.get('ticker', '').strip().upper()
     if not ticker:
         return jsonify({'name': '', 'error': 'ticker が必要です'}), 400
+    if not _TICKER_RE.fullmatch(ticker):
+        return jsonify({'name': '', 'error': '無効なtickerです'}), 400
     try:
         if ticker.upper().endswith('.T'):
             quote_id = ticker[:-2] if is_fund_ticker(ticker) else ticker

@@ -33,6 +33,9 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; min-height: 100vh; font-variant-numeric: tabular-nums; }
+    .visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible,
+    [role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     /* ── Header ── */
     header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 13px 24px; display: flex; align-items: center; gap: 12px; }
@@ -91,6 +94,7 @@
     .pie-pct  { font-weight: 700; color: var(--text); }
     .pie-card { cursor: pointer; transition: border-color 0.15s; }
     .pie-card:hover { border-color: var(--accent); }
+    .pie-card:focus-visible, .card-interactive:focus-visible, .collateral-header:focus-visible { border-color: var(--accent); }
     .expand-hint { font-size: 11px; color: var(--text-muted); font-weight: 600; }
     .modal.pie-modal { width: 860px; }
     .pie-modal-body { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
@@ -112,6 +116,14 @@
     /* ── Toolbar ── */
     .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; gap: 10px; flex-wrap: wrap; }
     .toolbar-left { display: flex; gap: 8px; align-items: center; }
+    .toolbar-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+    .toolbar-more { position: relative; }
+    .toolbar-more summary { list-style: none; background: var(--surface2); color: var(--text-muted); border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .toolbar-more summary::-webkit-details-marker { display: none; }
+    .toolbar-more[open] summary { color: var(--text); background: var(--border); }
+    .toolbar-menu { position: absolute; z-index: 20; right: 0; top: calc(100% + 6px); width: 190px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
+    .toolbar-menu button { display: block; width: 100%; text-align: left; background: transparent; color: var(--text-muted); }
+    .toolbar-menu button:hover { background: var(--surface2); color: var(--text); }
     input[type="text"], input[type="number"], input[type="password"], select { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; transition: border-color 0.15s; }
     input:focus, select:focus { border-color: var(--accent); }
     .search { width: 190px; }
@@ -155,7 +167,7 @@
 
     /* ── Table ── */
     /* overflow:hidden は sticky thead を無効化するため使わず、角丸は各セルに付与 */
-    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-gutter: stable; }
     table { width: 100%; border-collapse: collapse; }
     thead tr { background: var(--surface2); }
     th { text-align: left; padding: 11px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; cursor: pointer; white-space: nowrap; user-select: none; }
@@ -188,6 +200,26 @@
     .actions { display: flex; gap: 4px; }
     .empty { text-align: center; padding: 56px 20px; color: var(--text-muted); }
     .empty-icon { font-size: 38px; margin-bottom: 10px; }
+
+    /* ── 買いたい候補 ── */
+    .watchlist-section { margin-bottom: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .watchlist-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+    .watchlist-title-wrap { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+    .watchlist-title { font-size: 13px; font-weight: 700; }
+    .watchlist-count { color: var(--text-muted); font-size: 11px; }
+    .watchlist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 10px; padding: 12px; }
+    .watch-card { min-width: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+    .watch-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .watch-card-name { min-width: 0; }
+    .watch-card-name .ticker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .watch-prices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 11px; }
+    .watch-price { background: var(--surface); border-radius: 7px; padding: 8px 9px; }
+    .watch-price-label { display: block; color: var(--text-muted); font-size: 10px; margin-bottom: 3px; }
+    .watch-price-value { font-weight: 700; font-size: 14px; }
+    .watch-status { margin-top: 9px; font-size: 11px; font-weight: 600; }
+    .watch-note { color: var(--text-muted); font-size: 11px; margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .watch-actions { display: flex; justify-content: flex-end; gap: 2px; margin-top: 8px; }
+    .watch-empty { padding: 22px 16px; text-align: center; color: var(--text-muted); font-size: 12px; }
 
     /* ── Modal ── */
     .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; align-items: center; justify-content: center; }
@@ -288,11 +320,22 @@
     }
 
     /* ── Responsive ── */
-    @media (max-width: 900px) { .charts-section { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) {
+      .charts-section { grid-template-columns: 1fr; }
+      .toolbar { align-items: stretch; }
+      .toolbar-left { min-width: 0; }
+      .toolbar-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+      .table-wrap { max-width: 100%; }
+      .table-wrap table { min-width: 920px; }
+      .table-wrap th:first-child, .table-wrap td:first-child { position: sticky; left: 0; z-index: 3; background: var(--surface); box-shadow: 1px 0 0 var(--border); }
+      .table-wrap thead th:first-child { background: var(--surface2); z-index: 4; }
+    }
     @media (max-width: 700px) {
       .container { padding: 12px; }
       .summary { grid-template-columns: 1fr 1fr; }
-      td:nth-child(4), th:nth-child(4), td:nth-child(5), th:nth-child(5) { display: none; }
+      .table-wrap table { min-width: 640px; }
+      .table-wrap td:nth-child(4), .table-wrap th:nth-child(4),
+      .table-wrap td:nth-child(5), .table-wrap th:nth-child(5) { display: none; }
       .form-grid { grid-template-columns: 1fr; }
       .form-group.full, .fund-note { grid-column: span 1; }
       .btn-sync span:last-child { display: none; }
@@ -316,6 +359,9 @@
       /* Toolbar: 検索を1行に、ボタンテキスト折り返し防止 */
       .toolbar { gap: 8px; }
       .toolbar-left { flex-wrap: wrap; }
+      .toolbar-actions { display: grid; grid-template-columns: 1fr 1fr auto; width: 100%; }
+      .toolbar-actions > button { width: 100%; }
+      .toolbar-more summary { text-align: center; }
       .search { flex: 1 1 100%; width: 100%; }
       #marketFilter, #tradeFilter { flex: 1; min-width: 0; }
       .btn-fetch, .btn-ghost, .btn-primary { white-space: nowrap; }
@@ -326,6 +372,8 @@
 
       /* Table: カードレイアウトに変換 */
       .table-wrap table { display: block; }
+      .table-wrap table { min-width: 0; }
+      .table-wrap th:first-child, .table-wrap td:first-child { position: static; box-shadow: none; }
       .table-wrap thead { display: none; }
       .table-wrap tbody { display: block; }
       .table-wrap tbody tr {
@@ -360,6 +408,8 @@
       .table-wrap td:nth-child(6)::before { content: '本日損益'; }
       .table-wrap td:nth-child(7)::before { content: '含み損益'; }
       .table-wrap td:nth-child(8)::before { content: '損益率'; }
+      .watchlist-grid { grid-template-columns: 1fr; }
+      .watchlist-header { align-items: flex-start; }
     }
   </style>
 </head>
@@ -370,11 +420,11 @@
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
   </svg>
   <h1>株式ポートフォリオ管理</h1>
-  <div class="api-status">
+  <div class="api-status" role="status" aria-live="polite">
     <div class="status-dot" id="apiDot"></div>
     <span id="apiLabel">確認中...</span>
   </div>
-  <span class="last-updated" id="lastUpdated"></span>
+  <span class="last-updated" id="lastUpdated" aria-live="polite"></span>
   <button class="btn-sync" id="syncBtn" onclick="smartSync()" title="クラウドと同期">
     <span id="syncIcon">☁️</span>
     <span id="syncStatusText">接続中...</span>
@@ -432,7 +482,7 @@
       <div class="card-value" id="collateralTotal">¥0</div>
       <div class="card-sub" id="collateralSub">0件</div>
     </div>
-    <div class="card" id="realizedCard" style="display:none; cursor:pointer" onclick="openTxModal()" title="クリックで取引履歴を表示">
+    <div class="card card-interactive" id="realizedCard" style="display:none; cursor:pointer" onclick="openTxModal()" title="クリックで取引履歴を表示" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="txOverlay">
       <div class="card-label">実現損益 (本年・確定)</div>
       <div class="card-value neutral" id="realizedValue">¥0</div>
       <div class="card-sub" id="realizedSub">累計: ¥0</div>
@@ -441,7 +491,7 @@
 
   <!-- Charts -->
   <div class="charts-section">
-    <div class="chart-card pie-card" onclick="openPieModal()" title="クリックで全銘柄を拡大表示">
+    <div class="chart-card pie-card" onclick="openPieModal()" title="クリックで全銘柄を拡大表示" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="pieOverlay">
       <div class="chart-header">
         <span class="chart-title">銘柄別配分</span>
         <span class="expand-hint">⤢ 拡大</span>
@@ -486,7 +536,7 @@
 
   <!-- 担保金管理 -->
   <div class="collateral-section">
-    <div class="collateral-header" id="collateralHeader" onclick="toggleCollateral()">
+    <div class="collateral-header" id="collateralHeader" onclick="toggleCollateral()" role="button" tabindex="0" aria-expanded="false" aria-controls="collateralBody">
       <span style="font-weight:600;font-size:13px">🏦 担保金管理（証拠金）</span>
       <div style="display:flex;align-items:center;gap:12px" onclick="event.stopPropagation()">
         <span style="font-size:12px;color:var(--text-muted)" id="collateralHeaderSum">合計: ¥0</span>
@@ -509,6 +559,18 @@
     </div>
   </div>
 
+  <!-- 買いたい候補 -->
+  <section class="watchlist-section" aria-labelledby="watchlistTitle">
+    <div class="watchlist-header">
+      <div class="watchlist-title-wrap">
+        <h2 class="watchlist-title" id="watchlistTitle">⭐ 買いたい候補</h2>
+        <span class="watchlist-count" id="watchlistCount">0件</span>
+      </div>
+      <button class="btn-primary" onclick="openWatchlistModal()">+ 候補を追加</button>
+    </div>
+    <div class="watchlist-grid" id="watchlistGrid"></div>
+  </section>
+
   <!-- Toolbar -->
   <div class="toolbar">
     <div class="toolbar-left">
@@ -526,13 +588,18 @@
         <option value="margin">信用のみ</option>
       </select>
     </div>
-    <div class="toolbar-left">
+    <div class="toolbar-left toolbar-actions">
       <button class="btn-fetch" id="fetchBtn" onclick="fetchAllPrices()">📡 価格を自動取得</button>
-      <button class="btn-ghost" onclick="openTxModal()">💰 実現損益</button>
-      <button class="btn-ghost" onclick="openRebalanceModal()">⚖️ リバランス</button>
-      <button class="btn-ghost" onclick="openImportModal()">📋 インポート</button>
-      <button class="btn-ghost" onclick="exportCSV()">📤 エクスポート</button>
       <button class="btn-primary" onclick="openModal()">+ 銘柄追加</button>
+      <details class="toolbar-more" id="toolbarMore">
+        <summary aria-label="その他の操作">その他 ▾</summary>
+        <div class="toolbar-menu">
+          <button onclick="openTxModal(); closeToolbarMore()">💰 実現損益</button>
+          <button onclick="openRebalanceModal(); closeToolbarMore()">⚖️ リバランス</button>
+          <button onclick="openImportModal(); closeToolbarMore()">📋 インポート</button>
+          <button onclick="exportCSV(); closeToolbarMore()">📤 エクスポート</button>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -626,6 +693,46 @@
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModal()">キャンセル</button>
       <button class="btn-primary" onclick="saveStock()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 買いたい候補モーダル -->
+<div class="overlay" id="watchlistOverlay" onclick="closeWatchlistModal(event)">
+  <div class="modal">
+    <h2 id="watchlistModalTitle">買いたい候補を追加</h2>
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="wMarket">市場</label>
+        <select id="wMarket" onchange="onWatchlistMarketChange()">
+          <option value="JP">日本株 (JPY)</option>
+          <option value="US">米国株 (USD)</option>
+          <option value="FUND">投資信託 (JPY)</option>
+          <option value="CRYPTO">暗号資産 (USD)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="wTicker">ティッカー / 銘柄コード *</label>
+        <input type="text" id="wTicker" placeholder="例: 7203" oninput="onWatchlistTickerInput()" autocomplete="off">
+        <span class="form-hint" id="wTickerHint">証券コード4桁 (例: 7203)</span>
+      </div>
+      <div class="form-group full">
+        <label for="wName">銘柄名 *</label>
+        <input type="text" id="wName" placeholder="コード入力後に自動取得">
+        <span class="form-hint" id="wNameHint" style="display:none">取得中…</span>
+      </div>
+      <div class="form-group full">
+        <label for="wTargetPrice" id="wTargetLabel">目標価格 (¥) *</label>
+        <input type="number" id="wTargetPrice" min="0" step="0.01" inputmode="decimal" placeholder="買いたい価格">
+      </div>
+      <div class="form-group full">
+        <label for="wNote">メモ</label>
+        <input type="text" id="wNote" placeholder="決算後に検討、押し目待ち など">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeWatchlistModal()">キャンセル</button>
+      <button class="btn-primary" onclick="saveWatchlistItem()">保存</button>
     </div>
   </div>
 </div>
@@ -928,7 +1035,7 @@
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 // ── バックエンドAPI設定 ────────────────────────────────────────────
@@ -951,6 +1058,7 @@ const API_BASE = (() => {
   if (s) return s;
   return 'https://stock-portfolio-1-2rnh.onrender.com';
 })();
+const LOCAL_ONLY_MODE = new URLSearchParams(window.location.search).get('local-only') === '1';
 
 // ── API (Yahoo Finance via CORS proxy) ────────────────────────────
 // fetchViaProxy 用: Render proxy を最優先、外部プロキシをバックアップ
@@ -990,7 +1098,7 @@ function extractPreloadedState(html) {
   return null;
 }
 
-async function fetchJapaneseQuotePage(quoteId) {
+async function fetchJapaneseQuotePage(quoteId, signal = null) {
   // /chart URL は Render プロキシ経由（海外IP）でもアクセス可能。
   // /quote/{code} は Yahoo Japan の IP 制限でブロックされることがある。
   const BLOCK_MARKERS = ['表示できません', 'ご覧になろうとしているページ', 'Just a moment'];
@@ -1001,7 +1109,7 @@ async function fetchJapaneseQuotePage(quoteId) {
   let lastErr;
   for (const url of urlsToTry) {
     try {
-      const html = await fetchViaProxy(url);
+      const html = await fetchViaProxy(url, signal);
       if (BLOCK_MARKERS.some(m => html.includes(m))) continue; // IP ブロックページ → 次を試す
       return html;
     } catch(e) { lastErr = e; }
@@ -1009,13 +1117,13 @@ async function fetchJapaneseQuotePage(quoteId) {
   throw lastErr || new Error('YFJP fetch failed');
 }
 
-async function fetchFundPage(fundCode) {
-  return await fetchJapaneseQuotePage(fundCode);
+async function fetchFundPage(fundCode, signal = null) {
+  return await fetchJapaneseQuotePage(fundCode, signal);
 }
 
-async function getCurrentPriceFundJS(ticker) {
+async function getCurrentPriceFundJS(ticker, signal = null) {
   const fundCode = ticker.replace(/\.T$/, '');
-  const html  = await fetchFundPage(fundCode);
+  const html  = await fetchFundPage(fundCode, signal);
   const state = extractPreloadedState(html);
   if (!state) throw new Error('データ取得失敗');
   const fp      = state.mainFundPriceBoard?.fundPrices || {};
@@ -1067,13 +1175,19 @@ async function fetchSecurityName(ticker, market) {
   return result.meta.shortName || result.meta.longName || '';
 }
 
-async function fetchViaProxy(url) {
+async function fetchViaProxy(url, signal = null) {
   // 動作中のプロキシから試し、失敗したら次へ切り替え
   for (let attempt = 0; attempt < CORS_PROXIES.length; attempt++) {
     const idx = (_proxyIdx + attempt) % CORS_PROXIES.length;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason || new DOMException('Aborted', 'AbortError'));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), 12000);
     try {
       const res = await fetch(CORS_PROXIES[idx] + encodeURIComponent(url), {
-        signal: AbortSignal.timeout(12000),
+        signal: controller.signal,
+        cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
@@ -1082,14 +1196,18 @@ async function fetchViaProxy(url) {
       _proxyIdx = idx; // 成功したプロキシを優先
       return text;
     } catch(e) {
+      if (signal?.aborted) throw e;
       if (attempt === CORS_PROXIES.length - 1) throw e;
+    } finally {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', abort);
     }
   }
 }
 
-async function yhFetch(ticker, params = '') {
+async function yhFetch(ticker, params = '', signal = null) {
   const raw  = `${YF_CHART}${encodeURIComponent(ticker)}${params}`;
-  const text = await fetchViaProxy(raw);
+  const text = await fetchViaProxy(raw, signal);
   const json = JSON.parse(text);
   const err  = json.chart?.error?.description;
   if (err) throw new Error(err);
@@ -1099,9 +1217,9 @@ async function yhFetch(ticker, params = '') {
 }
 
 // CORSプロキシ専用（Renderが失敗した場合のフォールバック）
-async function getCurrentPriceViaCors(ticker) {
-  if (isFundTicker(ticker)) return await getCurrentPriceFundJS(ticker);
-  const r    = await yhFetch(ticker, '?interval=1d&range=5d');
+async function getCurrentPriceViaCors(ticker, signal = null) {
+  if (isFundTicker(ticker)) return await getCurrentPriceFundJS(ticker, signal);
+  const r    = await yhFetch(ticker, '?interval=1d&range=5d', signal);
   const meta = r.meta;
   const postPrice = Number.isFinite(meta.postMarketPrice) ? meta.postMarketPrice : null;
   const postChange = Number.isFinite(meta.postMarketChange) ? meta.postMarketChange : null;
@@ -1254,6 +1372,10 @@ let collateralOpen    = false;
 let transactions      = [];  // 取引履歴（売買ログ）[{id,date,type,ticker,quantity,price,avgCost,fee,realizedPLJPY,...}, ...]
 const TRANSACTIONS_KEY = 'transactions_v1';
 
+let watchlist          = []; // 買いたい候補 [{id,ticker,name,market,targetPrice,note,...}]
+const WATCHLIST_KEY    = 'watchlist_v1';
+let watchlistEditId    = null;
+
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -1268,11 +1390,12 @@ function getYahooTicker(ticker, market) {
 }
 function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ? 'USD' : 'JPY'; }
 function getMarketLabel(market) {
-  return ({ JP: '日本株', FUND: '投資信託' })[market] || market;
+  return ({ JP: '日本株', US: '米国株', FUND: '投資信託', CRYPTO: '暗号資産' })[market] || market;
 }
 function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
 function getCostJPY(s)       { return toJPY(s.avgPrice * s.quantity, s.avgCurrency || s.currency); }
 function getStockPLJPY(s)    { return toJPY(s.currentPrice * s.quantity, s.currency) - getCostJPY(s); }
+function closeToolbarMore()  { document.getElementById('toolbarMore')?.removeAttribute('open'); }
 
 // 実現損益（円）: 約定時に確定した realizedPLJPY を優先。無ければ取得単価から計算。
 // 計算不可（買い・取得単価不明＝SBIの現物売/投信解約など）は null を返す。
@@ -1306,7 +1429,7 @@ function fmtJPY(n)       { return '¥' + Math.round(Math.abs(n)).toLocaleString(
 function fmtPL(pl, cur)  { return (pl >= 0 ? '+' : '-') + fmtPrice(Math.abs(pl), cur); }
 function pctStr(p)        { return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; }
 function plClass(n)       { return n > 0 ? 'profit' : n < 0 ? 'loss' : 'neutral'; }
-function esc(s)           { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s)           { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function getUnitDayChange(s) {
   if (s.dayChange != null && Number.isFinite(s.dayChange)) return s.dayChange;
   if (s.prevClose != null && s.currentPrice != null) return s.currentPrice - s.prevClose;
@@ -1440,6 +1563,27 @@ function migrateStock(s) {
   return s;
 }
 
+function migrateWatchlistItem(item) {
+  const market = ['JP','US','FUND','CRYPTO'].includes(item?.market) ? item.market : detectMarketFromTicker(item?.ticker || '');
+  const ticker = String(item?.ticker || '').trim().toUpperCase();
+  return {
+    id: item?.id || uid(),
+    ticker,
+    yahooTicker: item?.yahooTicker || getYahooTicker(ticker, market),
+    name: String(item?.name || ticker),
+    market,
+    currency: item?.currency || getCurrency(market),
+    targetPrice: Number(item?.targetPrice) || 0,
+    currentPrice: Number(item?.currentPrice) || null,
+    prevClose: Number.isFinite(Number(item?.prevClose)) ? Number(item.prevClose) : null,
+    dayChange: Number.isFinite(Number(item?.dayChange)) ? Number(item.dayChange) : null,
+    note: String(item?.note || ''),
+    lastFetched: item?.lastFetched || null,
+    fetchError: item?.fetchError || null,
+    navDate: item?.navDate || null,
+  };
+}
+
 // ── Default data ──────────────────────────────────────────────────
 function defaultStocks() {
   return [
@@ -1457,6 +1601,7 @@ function defaultStocks() {
 let _sb = null;
 const _SB_URL = 'https://ugyashjjxoezvlnjtizw.supabase.co';
 const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4';
+const SYNC_KEYS = ['sp_stocks','sp_portfolio_log','sp_collateral','sp_transactions','sp_watchlist'];
 
 async function _sbGet(key) {
   const { data } = await _sb.from('user_data').select('value,updated_at').eq('key', key).maybeSingle();
@@ -1483,7 +1628,7 @@ const LOCAL_UPDATED_AT_KEY = 'stocks_updated_at';
 
 // デバウンス自動保存（変更から2秒後に保存）
 function scheduleSyncSave() {
-  if (!initialLoadDone) return; // 起動時sbLoad完了前はアップロードしない
+  if (!initialLoadDone || !_sb) return; // 起動時sbLoad完了前・ローカル専用モードはアップロードしない
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => sbSave(true), 500);
 }
@@ -1497,12 +1642,22 @@ function _canonicalStocks() {
   return JSON.stringify(stocks.map(({ currentPrice, prevClose, dayChange, lastFetched, fetchError, navDate, ...rest }) => rest));
 }
 
+async function _sbGetLatestUpdatedAt() {
+  const { data } = await _sb.from('user_data').select('updated_at').in('key', SYNC_KEYS);
+  return (data || []).map(row => row.updated_at).filter(Boolean).sort().at(-1) || null;
+}
+
+function _canonicalWatchlist() {
+  return JSON.stringify(watchlist.map(({ currentPrice, prevClose, dayChange, lastFetched, fetchError, navDate, ...rest }) => rest));
+}
+
 function _syncPayloads() {
   return {
     sp_stocks:        _canonicalStocks(),
     sp_portfolio_log: JSON.stringify(portfolioLog),
     sp_collateral:    JSON.stringify(collateralEntries),
     sp_transactions:  JSON.stringify(transactions),
+    sp_watchlist:     _canonicalWatchlist(),
   };
 }
 
@@ -1517,19 +1672,16 @@ async function _doSave(force = false) {
     sp_portfolio_log: portfolioLog,
     sp_collateral:    collateralEntries,
     sp_transactions:  transactions,
+    sp_watchlist:     watchlist,
   };
   const payloads = _syncPayloads();
   const dirty = Object.keys(values).filter(k => force || payloads[k] !== _lastSynced[k]);
   if (!dirty.length) return;
   const tsList = await Promise.all(dirty.map(k => _sbSet(k, values[k])));
   dirty.forEach(k => { _lastSynced[k] = payloads[k]; });
-  // sp_stocks を実際に書いた時だけ「最終更新」を進める。
-  // 書いていないのに進めると、他端末の sp_stocks 更新（cloudTs > localTs 判定）を
-  // 取り込めなくなるため。
-  const stocksIdx = dirty.indexOf('sp_stocks');
-  if (stocksIdx >= 0) {
-    // サーバー側の実際のタイムスタンプを使う（ローカル時刻とのズレを防ぐ）
-    const savedAt = tsList[stocksIdx] || new Date().toISOString();
+  // いずれかの同期対象を書いたら、サーバー時刻の最新値を端末側にも記録する。
+  if (dirty.length) {
+    const savedAt = tsList.filter(Boolean).sort().at(-1) || new Date().toISOString();
     lastCloudUpdatedAt = savedAt;
     localStorage.setItem(LOCAL_UPDATED_AT_KEY, savedAt);
   }
@@ -1572,17 +1724,20 @@ async function sbLoad(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [stocksRow, logRow, collateralRow, txRow] = await Promise.all([
+    const [stocksRow, logRow, collateralRow, txRow, watchRow] = await Promise.all([
       _sbGet('sp_stocks'),
       _sbGet('sp_portfolio_log'),
       _sbGet('sp_collateral'),
       _sbGet('sp_transactions'),
+      _sbGet('sp_watchlist'),
     ]);
     const cloudStocks     = stocksRow?.value      ?? null;
     const cloudLog        = logRow?.value          ?? null;
     const cloudCollateral = collateralRow?.value   ?? null;
     const cloudTransactions = txRow?.value         ?? null;
-    const cloudUpdatedAt  = stocksRow?.updated_at  ?? null;
+    const cloudWatchlist    = watchRow?.value       ?? null;
+    const cloudUpdatedAt  = [stocksRow, logRow, collateralRow, txRow, watchRow]
+      .map(row => row?.updated_at).filter(Boolean).sort().at(-1) || null;
     const localStocks     = JSON.parse(localStorage.getItem('stocks') || '[]');
     const localLog        = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 
@@ -1594,6 +1749,11 @@ async function sbLoad(silent = false) {
       transactions = mergeTransactions(localTransactions, cloudTransactions);
       localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
       _lastSynced.sp_transactions = JSON.stringify(Array.isArray(cloudTransactions) ? cloudTransactions : []);
+    }
+    if (Array.isArray(cloudWatchlist)) {
+      _lastSynced.sp_watchlist = JSON.stringify(cloudWatchlist.map(migrateWatchlistItem).map(
+        ({ currentPrice, prevClose, dayChange, lastFetched, fetchError, navDate, ...rest }) => rest
+      ));
     }
 
     // 旧Gist設定が残っていればGistからデータを取得してSupabaseへ移行
@@ -1636,6 +1796,7 @@ async function sbLoad(silent = false) {
         stocks            = cloudStocks.map(migrateStock);
         portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
         if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
+        if (Array.isArray(cloudWatchlist)) { watchlist = cloudWatchlist.map(migrateWatchlistItem); localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist)); }
         // 取引履歴(transactions)は上部で和集合マージ済み。
         // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
         // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
@@ -1643,6 +1804,7 @@ async function sbLoad(silent = false) {
         _lastSynced.sp_stocks        = _canonicalStocks();
         _lastSynced.sp_portfolio_log = JSON.stringify(normalizePortfolioLog(cloudLog || []));
         if (Array.isArray(cloudCollateral)) _lastSynced.sp_collateral = JSON.stringify(collateralEntries);
+        if (Array.isArray(cloudWatchlist)) _lastSynced.sp_watchlist = _canonicalWatchlist();
         recordDailyLog();
         lastCloudUpdatedAt = cloudUpdatedAt;
         localStorage.setItem('stocks', JSON.stringify(stocks));
@@ -1650,6 +1812,7 @@ async function sbLoad(silent = false) {
         localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
         document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
         render();
+        renderWatchlist();
         renderPieChart();
         renderLineChart();
         if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
@@ -1678,8 +1841,7 @@ async function smartSync() {
   updateSyncIcon('syncing');
   let cloudUpdatedAt = null;
   try {
-    const row = await _sbGet('sp_stocks');
-    cloudUpdatedAt = row?.updated_at ?? null;
+    cloudUpdatedAt = await _sbGetLatestUpdatedAt();
   } catch(e) {
     isSyncing = false;
     updateSyncIcon('error');
@@ -1702,7 +1864,7 @@ async function smartSync() {
 async function pollCloudChanges() {
   if (isSyncing || document.hidden) return;  // 非表示中はスキップ（Realtime 購読が復帰時に拾う）
   try {
-    const cloudTs = await _sbGetUpdatedAt('sp_stocks');
+    const cloudTs = await _sbGetLatestUpdatedAt();
     const localTs = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
     // ローカルタイムスタンプと比較（サーバー時刻ベースで判断）
     if (cloudTs && (!localTs || cloudTs > localTs)) {
@@ -1718,10 +1880,12 @@ function updateSyncIcon(state) {
   const icon = document.getElementById('syncIcon');
   const text = document.getElementById('syncStatusText');
   btn.className = 'btn-sync';
+  btn.disabled = state === 'local';
   switch(state) {
     case 'ok':      icon.textContent = '☁️'; text.textContent = '同期済み';   btn.classList.add('synced');     break;
     case 'syncing': icon.textContent = '🔄'; text.textContent = '同期中...';  btn.classList.add('syncing');    break;
     case 'error':   icon.textContent = '⚠️'; text.textContent = '同期エラー'; btn.classList.add('sync-error'); break;
+    case 'local':   icon.textContent = '💾'; text.textContent = 'ローカルのみ'; break;
     default:        icon.textContent = '☁️'; text.textContent = '接続中...'; break;
   }
 }
@@ -1732,8 +1896,10 @@ stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
 try { transactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) { transactions = []; }
+try { watchlist = JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]').map(migrateWatchlistItem); } catch(e) { watchlist = []; }
 if (recordDailyLog()) localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
 renderCollateral();
+renderWatchlist();
 
 // ── Render ウォームアップ（スリープ対策）───────────────────────
 // 複数の autoFetchName が同時に呼ばれても Render へのリクエストは1本に絞る。
@@ -1782,23 +1948,91 @@ function _wallClock(timeZone) {
   // 指定タイムゾーンの「壁時計」をローカル Date として得る（曜日・時刻の判定用）
   return new Date(new Date().toLocaleString('en-US', { timeZone }));
 }
+const _holidayCache = new Map();
+function _dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function _dateAt(year, month, day) { return new Date(year, month - 1, day, 12); }
+function _addDays(d, days) { const out = new Date(d); out.setDate(out.getDate() + days); return out; }
+function _nthWeekday(year, month, weekday, nth) {
+  const first = _dateAt(year, month, 1);
+  return 1 + (weekday - first.getDay() + 7) % 7 + (nth - 1) * 7;
+}
+function _lastWeekday(year, month, weekday) {
+  const last = _dateAt(year, month + 1, 0);
+  return last.getDate() - (last.getDay() - weekday + 7) % 7;
+}
+function _observedHoliday(year, month, day) {
+  const d = _dateAt(year, month, day);
+  return d.getDay() === 6 ? _addDays(d, -1) : d.getDay() === 0 ? _addDays(d, 1) : d;
+}
+function _easterSunday(year) {
+  const a=year%19, b=Math.floor(year/100), c=year%100, d=Math.floor(b/4), e=b%4;
+  const f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3), h=(19*a+b-d-g+15)%30;
+  const i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
+  const month=Math.floor((h+l-7*m+114)/31), day=(h+l-7*m+114)%31+1;
+  return _dateAt(year, month, day);
+}
+function _usMarketHolidays(year) {
+  const cacheKey = `us-${year}`;
+  if (_holidayCache.has(cacheKey)) return _holidayCache.get(cacheKey);
+  const dates = [
+    _observedHoliday(year,1,1), _dateAt(year,1,_nthWeekday(year,1,1,3)),
+    _dateAt(year,2,_nthWeekday(year,2,1,3)), _addDays(_easterSunday(year),-2),
+    _dateAt(year,5,_lastWeekday(year,5,1)), _observedHoliday(year,6,19),
+    _observedHoliday(year,7,4), _dateAt(year,9,_nthWeekday(year,9,1,1)),
+    _dateAt(year,11,_nthWeekday(year,11,4,4)), _observedHoliday(year,12,25),
+    _observedHoliday(year+1,1,1),
+  ];
+  const result = new Set(dates.map(_dateKey));
+  _holidayCache.set(cacheKey, result);
+  return result;
+}
+function _jpMarketHolidays(year) {
+  const cacheKey = `jp-${year}`;
+  if (_holidayCache.has(cacheKey)) return _holidayCache.get(cacheKey);
+  const vernal = Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  const autumn = Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  const dates = [
+    [1,1],[1,2],[1,3],[1,_nthWeekday(year,1,1,2)],[2,11],[2,23],[3,vernal],
+    [4,29],[5,3],[5,4],[5,5],[7,_nthWeekday(year,7,1,3)],[8,11],
+    [9,_nthWeekday(year,9,1,3)],[9,autumn],[10,_nthWeekday(year,10,1,2)],
+    [11,3],[11,23],[12,31],
+  ].map(([m,d]) => _dateAt(year,m,d));
+  const result = new Set(dates.map(_dateKey));
+  // 日曜の祝日は次の非祝日へ振替。
+  dates.forEach(d => {
+    if (d.getDay() !== 0) return;
+    let substitute = _addDays(d, 1);
+    while (result.has(_dateKey(substitute))) substitute = _addDays(substitute, 1);
+    result.add(_dateKey(substitute));
+  });
+  // 祝日に挟まれた平日は国民の休日。
+  for (let d=_dateAt(year,1,2), end=_dateAt(year,12,30); d<=end; d=_addDays(d,1)) {
+    if (d.getDay() !== 0 && d.getDay() !== 6 && !result.has(_dateKey(d)) &&
+        result.has(_dateKey(_addDays(d,-1))) && result.has(_dateKey(_addDays(d,1)))) result.add(_dateKey(d));
+  }
+  _holidayCache.set(cacheKey, result);
+  return result;
+}
 function isJpMarketOpen(d = _wallClock('Asia/Tokyo')) {
   const wd = d.getDay();
   if (wd === 0 || wd === 6) return false;            // 土日
+  if (_jpMarketHolidays(d.getFullYear()).has(_dateKey(d))) return false;
   const m = d.getHours() * 60 + d.getMinutes();
   return (m >= 540 && m < 690) || (m >= 750 && m < 930); // 前場 9:00-11:30 / 後場 12:30-15:30
 }
 function isUsMarketOpen(d = _wallClock('America/New_York')) {
   const wd = d.getDay();
   if (wd === 0 || wd === 6) return false;
+  if (_usMarketHolidays(d.getFullYear()).has(_dateKey(d))) return false;
   const m = d.getHours() * 60 + d.getMinutes();
   return m >= 570 && m < 960;                         // 9:30-16:00 ET
 }
 // 保有銘柄のいずれかの市場が稼働中か（暗号資産は 24/7 のため常に true）
 function anyHeldMarketActive() {
-  if (stocks.some(s => s.market === 'CRYPTO')) return true;
-  const hasJp = stocks.some(s => s.market === 'JP' || s.market === 'FUND');
-  const hasUs = stocks.some(s => s.market === 'US');
+  const tracked = stocks.concat(watchlist);
+  if (tracked.some(s => s.market === 'CRYPTO')) return true;
+  const hasJp = tracked.some(s => s.market === 'JP' || s.market === 'FUND');
+  const hasUs = tracked.some(s => s.market === 'US');
   return (hasJp && isJpMarketOpen()) || (hasUs && isUsMarketOpen());
 }
 
@@ -1868,7 +2102,7 @@ function bootLibsReady() {
   fetchHistory(currentPeriod);
 
   // クラウド同期（supabase 依存）
-  if (window.supabase) {
+  if (window.supabase && !LOCAL_ONLY_MODE) {
     _sb = supabase.createClient(_SB_URL, _SB_KEY);
 
     // 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
@@ -1877,7 +2111,8 @@ function bootLibsReady() {
 
     // Supabase Realtimeで他デバイスの変更を即時検知
     _sb.channel('portfolio_sync')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'key=eq.sp_stocks' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_data' }, payload => {
+        if (!SYNC_KEYS.includes(payload?.new?.key || payload?.old?.key)) return;
         sbLoad(true);
       })
       .subscribe();
@@ -1893,6 +2128,10 @@ function bootLibsReady() {
         history.replaceState({}, '', location.pathname);
       }, 1200);
     }
+  } else if (LOCAL_ONLY_MODE) {
+    initialLoadDone = true;
+    updateSyncIcon('local');
+    setTimeout(localizeJapaneseNames, 0);
   } else {
     console.warn('supabase 未ロード: クラウド同期は無効（ローカルのみで動作）');
     updateSyncIcon('error');
@@ -1938,19 +2177,30 @@ function save(skipSync = false) {
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
   localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries));
   localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+  localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
   // 「最終更新」タイムスタンプは同期対象のユーザーデータ（銘柄・担保金・取引履歴）が
   // 変わった時だけ進める。価格更新だけで進めると localTs が常に最新になり、
   // 他端末の sp_stocks 変更（cloudTs > localTs 判定）を取り込めなくなる。
   const userDataChanged =
     _canonicalStocks() !== _lastSynced.sp_stocks ||
     JSON.stringify(collateralEntries) !== _lastSynced.sp_collateral ||
-    JSON.stringify(transactions) !== _lastSynced.sp_transactions;
+    JSON.stringify(transactions) !== _lastSynced.sp_transactions ||
+    _canonicalWatchlist() !== _lastSynced.sp_watchlist;
   if (userDataChanged) {
     localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
   }
   document.getElementById('lastUpdated').textContent =
     '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   if (!skipSync) scheduleSyncSave();
+}
+
+// 価格更新時は価格を含む配列と当日ログだけを保存し、担保金・取引履歴などを再直列化しない。
+function savePriceState() {
+  localStorage.setItem('stocks', JSON.stringify(stocks));
+  localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
+  localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+  document.getElementById('lastUpdated').textContent =
+    '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
 }
 
 // ── API 接続テスト ─────────────────────────────────────────────────
@@ -2004,6 +2254,35 @@ async function fetchRate() {
 }
 
 // ── 全銘柄 価格取得 ────────────────────────────────────────────────
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try { results[index] = { status: 'fulfilled', value: await worker(items[index], index) }; }
+      catch (reason) { results[index] = { status: 'rejected', reason }; }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function normalizeBackendPrice(ticker, data) {
+  if (!data?.price) return null;
+  const fund = isFundTicker(ticker);
+  return {
+    ticker,
+    price: fund ? data.price / 10000 : data.price,
+    prev_close: fund && data.prev_close != null ? data.prev_close / 10000 : data.prev_close ?? null,
+    day_change: fund && data.day_change != null ? data.day_change / 10000 : data.day_change ?? null,
+    currency: data.currency || 'JPY',
+    nav_date: data.nav_date ?? null,
+    cache_age_sec: data.cache_age_sec ?? null,
+    stale: data.stale === true,
+  };
+}
+
 async function fetchAllPrices() {
   if (isFetching) {
     if (!isFetchQueued) { isFetchQueued = true; setTimeout(() => { isFetchQueued = false; fetchAllPrices(); }, 1500); }
@@ -2013,49 +2292,46 @@ async function fetchAllPrices() {
   const btn = document.getElementById('fetchBtn');
   btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
   btn.disabled  = true;
-  const withTimeout = (promise, ms) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-  ]);
 
   try {
-    // 全銘柄 + USDJPY を取得
-    const allTickers = [...new Set(stocks.map(s => s.yahooTicker)), 'USDJPY=X'];
+    // 保有銘柄・買いたい候補・USDJPY を重複なしで取得
+    const allTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
     const priceMap   = {};
 
-    // ── Step1: バックエンドに全銘柄を1回のバッチリクエスト（最速）──
-    // API_BASE が空文字 (localhost) でも相対パスで動くので常にトライする
+    // ── Step1: バックエンドへ最大64件ずつ、同時2バッチまで ──
     if (typeof API_BASE === 'string') {
       try {
         if (API_BASE) await wakeRender(); // スリープ中のRenderが起動するまで待機（最大65秒）
-        const res = await fetch(
-          `${API_BASE}/api/prices?tickers=${encodeURIComponent(allTickers.join(','))}`,
-          { signal: AbortSignal.timeout(45000), cache: 'no-store' }
-        );
-        if (res.ok) {
+        const batches = [];
+        for (let i = 0; i < allTickers.length; i += 64) batches.push(allTickers.slice(i, i + 64));
+        const responses = await mapWithConcurrency(batches, 2, async batch => {
+          const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(batch.join(','))}`, {
+            signal: AbortSignal.timeout(45000), cache: 'no-store',
+          });
+          if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
           const data = await res.json();
           if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
-          Object.entries(data).forEach(([t, d]) => {
-            if (!d?.price) return;
-            // 投信はRenderが円/万口で返すので÷10,000して円/口に変換
-            const price = isFundTicker(t) ? d.price / 10000 : d.price;
-            const prev  = isFundTicker(t) && d.prev_close != null ? d.prev_close / 10000 : d.prev_close;
-            const dayCh = isFundTicker(t) && d.day_change != null ? d.day_change / 10000 : d.day_change;
-            priceMap[t] = { ticker: t, price, prev_close: prev ?? null, day_change: dayCh ?? null, currency: d.currency || 'JPY', nav_date: d.nav_date ?? null, cache_age_sec: d.cache_age_sec ?? null, stale: d.stale === true };
+          return data;
+        });
+        responses.forEach(response => {
+          if (response.status !== 'fulfilled') return;
+          Object.entries(response.value).forEach(([ticker, data]) => {
+            const normalized = normalizeBackendPrice(ticker, data);
+            if (normalized) priceMap[ticker] = normalized;
           });
-        }
-      } catch(e) {}
+        });
+      } catch(e) { console.warn('価格APIバッチ取得:', e?.message || e); }
     }
 
-    // ── Step2: 取得できなかった銘柄をCORSプロキシで並列補完 ──
+    // ── Step2: 未取得分を同時4件に制限し、15秒で通信自体を中止 ──
     const missing = allTickers.filter(t => !priceMap[t]?.price);
     if (missing.length) {
-      const corsResults = await Promise.allSettled(
-        missing.map(t => withTimeout(
-          getCurrentPriceViaCors(t).then(d => ({ ticker: t, ...d })),
-          15000
-        ))
-      );
+      const corsResults = await mapWithConcurrency(missing, 4, async ticker => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), 15000);
+        try { return { ticker, ...await getCurrentPriceViaCors(ticker, controller.signal) }; }
+        finally { clearTimeout(timeoutId); }
+      });
       corsResults.forEach(r => {
         if (r.status === 'fulfilled' && r.value?.ticker && r.value?.price) priceMap[r.value.ticker] = r.value;
       });
@@ -2073,18 +2349,16 @@ async function fetchAllPrices() {
     let updated = 0, failed = 0, changed = 0, unchanged = 0;
     const now = new Date().toISOString();
     const cache = loadPriceCache();
-    // 変動検出用: 更新前の価格をスナップショット
-    const oldPrices = Object.fromEntries(stocks.map(s => [s.id, s.currentPrice]));
+    const oldPrices = new Map(stocks.concat(watchlist).map(s => [s.id, s.currentPrice]));
 
-    stocks = stocks.map(s => {
+    const applyPrice = (s, flash = false) => {
       const d = priceMap[s.yahooTicker];
       if (d?.price) {
         updated++;
-        const prevP = oldPrices[s.id];
+        const prevP = oldPrices.get(s.id);
         if (prevP !== d.price) {
           changed++;
-          // 初回（旧価格なし）はフラッシュさせない
-          if (prevP != null) _flashMap[s.id] = d.price > prevP ? 'up' : 'down';
+          if (flash && prevP != null) _flashMap[s.id] = d.price > prevP ? 'up' : 'down';
         } else unchanged++;
         return {
           ...s,
@@ -2093,7 +2367,7 @@ async function fetchAllPrices() {
           dayChange: d.day_change ?? ((d.prev_close != null) ? (d.price - d.prev_close) : null),
           currency: d.currency || s.currency,
           lastFetched: now,
-          fetchError: null,
+          fetchError: d.stale ? '古いキャッシュ' : null,
           navDate: d.nav_date ?? null,
         };
       }
@@ -2113,17 +2387,24 @@ async function fetchAllPrices() {
       const apiErr = d?.error ? String(d.error).slice(0, 80) : null;
       const label = apiErr ? `失敗: ${apiErr}` : (s.currentPrice ? '更新なし' : '取得失敗');
       return { ...s, lastFetched: now, fetchError: label };
-    });
+    };
+    stocks = stocks.map(s => applyPrice(s, true));
+    watchlist = watchlist.map(s => applyPrice(s, false));
 
     // 成功分をキャッシュ保存
     if (updated > 0) savePriceCache(priceMap, usdJpyRate);
 
     // API ステータス更新
     const dot = document.getElementById('apiDot');
-    if (updated > 0) {
+    const freshPriceCount = Object.values(priceMap).filter(d => d?.price && !d?.stale).length;
+    if (updated > 0 && freshPriceCount > 0) {
       apiOnline = true;
       dot.style.background = 'var(--green)';
       document.getElementById('apiLabel').textContent = 'Yahoo Finance ✓';
+    } else if (updated > 0) {
+      apiOnline = true;
+      dot.style.background = 'var(--yellow)';
+      document.getElementById('apiLabel').textContent = 'サーバーキャッシュ';
     } else if (cache) {
       // キャッシュ使用中 — エラー扱いしない
       dot.style.background = 'var(--yellow)';
@@ -2138,12 +2419,13 @@ async function fetchAllPrices() {
     // 取りこぼし防止: 取得結果（キャッシュ含む）を使って当日ログを補完
     const logChanged = recordDailyLog();
 
-    save();
-    try { render(); } catch(e) { console.error('render error:', e); }
+    savePriceState();
+    try { render(true); } catch(e) { console.error('render error:', e); }
+    try { renderWatchlist(true); } catch(e) { console.error('renderWatchlist error:', e); }
     try { renderPieChart(); } catch(e) { console.warn('renderPieChart error:', e); }
     try { renderLineChart(); } catch(e) { console.warn('renderLineChart error:', e); }
 
-    if (logChanged && updated > 0) sbSave(true); // 当日ログが更新されたら即同期
+    if (logChanged && updated > 0 && _sb && initialLoadDone) sbSave(true); // 当日ログが更新されたら即同期
 
     // サーバキャッシュ年齢/staleを集計（cache_age_sec が付いていればキャッシュ応答）
     const cacheAges = Object.values(priceMap)
@@ -2269,16 +2551,26 @@ function renderLineChart() {
     return ['1y','2y','5y'].includes(currentPeriod) ? `${y}/${m}` : `${m}/${d}`;
   });
 
-  if (lineChart) lineChart.destroy();
   canvas.style.display = 'block';
   placeholder.style.display = 'none';
+
+  const lineData = points.map(p => p.value);
+  if (lineChart) {
+    lineChart.data.labels = labels;
+    Object.assign(lineChart.data.datasets[0], {
+      data: lineData, borderColor: color, backgroundColor: color + '18',
+      pointRadius: points.length <= 31 ? 3 : 0, pointHoverBackgroundColor: color,
+    });
+    lineChart.update('none');
+    return;
+  }
 
   lineChart = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
       labels,
       datasets: [{
-        data: points.map(p => p.value),
+        data: lineData,
         borderColor: color,
         backgroundColor: color + '18',
         borderWidth: 2,
@@ -2318,36 +2610,70 @@ function renderLineChart() {
 }
 
 // ── 円グラフ ──────────────────────────────────────────────────────
-function renderPieChart() {
-  if (typeof Chart === 'undefined') return;   // CDN(defer) 未ロード時は no-op（ロード後に再描画される）
-  if (!stocks.length) return;
+function aggregateAllocation(items) {
+  const groups = new Map();
+  items.forEach(s => {
+    const value = toJPY((Number(s.currentPrice) || 0) * (Number(s.quantity) || 0), s.currency);
+    if (!(value > 0)) return;
+    const key = `${s.market}:${s.ticker}`;
+    const current = groups.get(key) || { ticker: s.ticker, name: s.name, value: 0 };
+    current.value += value;
+    if (!current.name && s.name) current.name = s.name;
+    groups.set(key, current);
+  });
+  return [...groups.values()].sort((a, b) => b.value - a.value);
+}
 
-  const data  = stocks
-    .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
-    .sort((a, b) => b.value - a.value);
-  const total  = data.reduce((s, d) => s + d.value, 0);
-  // 12色を超える銘柄数でも循環して全セグメントに色を割り当てる
+function topAllocation(data, limit = 10) {
+  if (data.length <= limit) return data;
+  const top = data.slice(0, limit);
+  const otherValue = data.slice(limit).reduce((sum, item) => sum + item.value, 0);
+  return [...top, { ticker: 'その他', name: `${data.length - limit}銘柄`, value: otherValue }];
+}
+
+function updateDoughnutChart(chart, canvasId, data, cutout, hoverOffset) {
   const colors = data.map((_, i) => COLORS[i % COLORS.length]);
-
-  if (pieChart) pieChart.destroy();
-  pieChart = new Chart(document.getElementById('pieCanvas').getContext('2d'), {
+  if (chart) {
+    chart.data.labels = data.map(d => d.ticker);
+    Object.assign(chart.data.datasets[0], {
+      data: data.map(d => d.value), backgroundColor: colors, hoverOffset,
+    });
+    chart.update('none');
+    return chart;
+  }
+  return new Chart(document.getElementById(canvasId).getContext('2d'), {
     type: 'doughnut',
     data: {
       labels: data.map(d => d.ticker),
-      datasets: [{ data: data.map(d => d.value), backgroundColor: colors, borderColor: '#1a1d27', borderWidth: 2, hoverOffset: 6 }],
+      datasets: [{ data: data.map(d => d.value), backgroundColor: colors, borderColor: '#1a1d27', borderWidth: 2, hoverOffset }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false, cutout: '62%',
+      responsive: true, maintainAspectRatio: false, cutout,
       plugins: {
         legend: { display: false },
         tooltip: {
           backgroundColor: '#1a1d27', borderColor: '#2e3148', borderWidth: 1,
           titleColor: '#8b90a8', bodyColor: '#e8eaf0',
-          callbacks: { label: ctx => ` ¥${Math.round(ctx.raw).toLocaleString('ja-JP')} (${(ctx.raw/total*100).toFixed(1)}%)` },
+          callbacks: { label: ctx => {
+            const total = ctx.dataset.data.reduce((sum, value) => sum + Number(value || 0), 0) || 1;
+            return ` ¥${Math.round(ctx.raw).toLocaleString('ja-JP')} (${(ctx.raw/total*100).toFixed(1)}%)`;
+          } },
         },
       },
     },
   });
+}
+
+function renderPieChart() {
+  if (typeof Chart === 'undefined') return;   // CDN(defer) 未ロード時は no-op（ロード後に再描画される）
+  const data = topAllocation(aggregateAllocation(stocks));
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  if (!data.length || !total) {
+    document.getElementById('pieLegend').innerHTML = '<div class="pie-empty">価格取得後に配分を表示します</div>';
+    return;
+  }
+  const colors = data.map((_, i) => COLORS[i % COLORS.length]);
+  pieChart = updateDoughnutChart(pieChart, 'pieCanvas', data, '62%', 6);
 
   document.getElementById('pieLegend').innerHTML = data.map((d, i) => `
     <div class="pie-legend-item">
@@ -2384,42 +2710,27 @@ function syncPieFilterButtons() {
 }
 
 function renderPieModal() {
-  const data = stocks
-    .filter(s => (!pieFilterMarket || s.market    === pieFilterMarket)
-              && (!pieFilterTrade  || s.tradeType === pieFilterTrade))
-    .map(s => ({ ticker: s.ticker, name: s.name, value: toJPY(s.currentPrice * s.quantity, s.currency) }))
-    .sort((a, b) => b.value - a.value);
+  const data = aggregateAllocation(stocks.filter(s =>
+    (!pieFilterMarket || s.market === pieFilterMarket) &&
+    (!pieFilterTrade || s.tradeType === pieFilterTrade)
+  ));
   const total  = data.reduce((s, d) => s + d.value, 0) || 1;
   const colors = data.map((_, i) => COLORS[i % COLORS.length]);
 
   document.getElementById('pieModalCount').textContent = data.length;
 
-  if (pieModalChart) { pieModalChart.destroy(); pieModalChart = null; }
-
   if (!data.length) {
+    if (pieModalChart) {
+      pieModalChart.data.labels = [];
+      pieModalChart.data.datasets[0].data = [];
+      pieModalChart.update('none');
+    }
     document.getElementById('pieModalLegend').innerHTML =
       '<div class="pie-empty">該当する銘柄がありません</div>';
     return;
   }
 
-  pieModalChart = new Chart(document.getElementById('pieModalCanvas').getContext('2d'), {
-    type: 'doughnut',
-    data: {
-      labels: data.map(d => d.ticker),
-      datasets: [{ data: data.map(d => d.value), backgroundColor: colors, borderColor: '#1a1d27', borderWidth: 2, hoverOffset: 8 }],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false, cutout: '58%',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1a1d27', borderColor: '#2e3148', borderWidth: 1,
-          titleColor: '#8b90a8', bodyColor: '#e8eaf0',
-          callbacks: { label: ctx => ` ¥${Math.round(ctx.raw).toLocaleString('ja-JP')} (${(ctx.raw/total*100).toFixed(1)}%)` },
-        },
-      },
-    },
-  });
+  pieModalChart = updateDoughnutChart(pieModalChart, 'pieModalCanvas', data, '58%', 8);
 
   document.getElementById('pieModalLegend').innerHTML = data.map((d, i) => `
     <div class="pie-legend-item">
@@ -2435,7 +2746,49 @@ function closePieModal(e) {
 }
 
 // ── テーブル & サマリー ────────────────────────────────────────────
-function render() {
+function stockRowHTML(s) {
+  const value    = (Number(s.currentPrice) || 0) * s.quantity;
+  const avgCur   = s.avgCurrency || s.currency;
+  const plJPY    = getStockPLJPY(s);
+  const costJPY_ = getCostJPY(s);
+  const plPct    = costJPY_ ? plJPY / costJPY_ * 100 : 0;
+  const unitDayChange = getUnitDayChange(s);
+  const prevUnit = unitDayChange != null ? (s.currentPrice - unitDayChange) : null;
+  const dayChg  = (prevUnit != null && prevUnit > 0) ? (unitDayChange / prevUnit * 100) : null;
+  const dayPLraw = unitDayChange != null ? toJPY(unitDayChange * s.quantity, s.currency) : null;
+  const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
+  const mLabel = s.market === 'CRYPTO' ? '暗号資産' : getMarketLabel(s.market);
+  const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
+  const fetchIcon = s.lastFetched
+    ? (s.fetchError === 'キャッシュ' || s.fetchError === '古いキャッシュ'
+        ? `<span class="fetch-err" title="古いキャッシュ値を表示">📋</span>`
+        : s.fetchError
+          ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
+          : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
+    : '';
+  const navDateHtml = (s.market === 'FUND' && s.navDate)
+    ? `<div style="font-size:10px;color:var(--text-muted);margin-top:1px">基準日: ${esc(s.navDate)}</div>`
+    : '';
+  const flashCls = _flashMap[s.id] === 'up' ? 'flash-up' : _flashMap[s.id] === 'down' ? 'flash-down' : '';
+  return `<tr data-stock-id="${esc(s.id)}">
+    <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}${s.accountType==='nisa'?'<span class="badge badge-nisa">NISA</span>':'<span class="badge badge-specific">特定</span>'}</div>
+        <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
+    <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
+    <td>${fmtPrice(s.avgPrice, avgCur)}</td>
+    <td class="${flashCls}">${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}${navDateHtml}</td>
+    <td class="${flashCls}">${fmtJPY(toJPY(value, s.currency))}</td>
+    <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
+    <td class="${plClass(plJPY)}">${(plJPY>=0?'+':'-')+fmtJPY(Math.abs(plJPY))}</td>
+    <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
+    <td><div class="actions">
+      <button class="btn-edit" onclick="editStock('${esc(s.id)}')">編集</button>
+      <button class="btn-sell" onclick="openSellModal('${esc(s.id)}')">売却</button>
+      <button class="btn-danger" onclick="deleteStock('${esc(s.id)}')">削除</button>
+    </div></td>
+  </tr>`;
+}
+
+function render(priceOnly = false) {
   let list = stocks.filter(s => {
     const q = filterText.toLowerCase();
     return (!q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || (s.sector||'').toLowerCase().includes(q))
@@ -2570,49 +2923,19 @@ function render() {
     tbody.innerHTML = `<tr><td colspan="9"><div class="empty"><div class="empty-icon">📊</div><div>銘柄が見つかりません</div></div></td></tr>`;
     return;
   }
-  tbody.innerHTML = list.map(s => {
-    const value    = s.currentPrice * s.quantity;
-    const avgCur   = s.avgCurrency || s.currency;
-    const useJPYpl = avgCur !== s.currency;
-    const pl       = useJPYpl ? null : value - s.avgPrice * s.quantity;
-    const plJPY    = getStockPLJPY(s);
-    const costJPY_ = getCostJPY(s);
-    const plPct    = costJPY_ ? plJPY / costJPY_ * 100 : 0;
-    const unitDayChange = getUnitDayChange(s);
-    const prevUnit = unitDayChange != null ? (s.currentPrice - unitDayChange) : null;
-    const dayChg  = (prevUnit != null && prevUnit > 0) ? (unitDayChange / prevUnit * 100) : null;
-    const dayPLraw = unitDayChange != null ? toJPY(unitDayChange * s.quantity, s.currency) : null;
-    const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
-    const mLabel = s.market === 'CRYPTO' ? 'BTC' : getMarketLabel(s.market);
-    const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
-    const fetchIcon = s.lastFetched
-      ? (s.fetchError === 'キャッシュ'
-          ? `<span class="fetch-err" title="取得失敗のためキャッシュ値を表示">📋</span>`
-          : s.fetchError
-            ? `<span class="fetch-err" title="${esc(s.fetchError)}">⚠</span>`
-            : `<span class="fetch-ok" title="${new Date(s.lastFetched).toLocaleTimeString('ja-JP')}">✓</span>`)
-      : '';
-    const navDateHtml = (s.market === 'FUND' && s.navDate)
-      ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">基準日: ${esc(s.navDate)}</div>`
-      : '';
-    const flashCls = _flashMap[s.id] === 'up' ? 'flash-up' : _flashMap[s.id] === 'down' ? 'flash-down' : '';
-    return `<tr>
-      <td><div class="ticker">${esc(s.ticker)}<span class="badge ${badge}">${mLabel}</span>${s.tradeType==='margin'?'<span class="badge badge-margin">信用</span>':''}${s.accountType==='nisa'?'<span class="badge badge-nisa">NISA</span>':'<span class="badge badge-specific">特定</span>'}</div>
-          <div class="ticker-name">${esc(s.name)}${s.sector?' · '+esc(s.sector):''}</div></td>
-      <td>${s.quantity.toLocaleString('ja-JP')} ${unit}</td>
-      <td>${fmtPrice(s.avgPrice, avgCur)}</td>
-      <td class="${flashCls}">${fmtPrice(s.currentPrice, s.currency)}${dayChg!=null?`<span class="${plClass(dayChg)}" style="font-size:11px;margin-left:3px">${pctStr(dayChg)}</span>`:''}${fetchIcon}${navDateHtml}</td>
-      <td class="${flashCls}">${fmtJPY(toJPY(value, s.currency))}</td>
-      <td class="${dayPLraw != null ? plClass(dayPLraw) : ''}">${dayPLraw != null ? (dayPLraw >= 0 ? '+' : '') + fmtJPY(dayPLraw) : '—'}</td>
-      <td class="${plClass(plJPY)}">${(plJPY>=0?'+':'-')+fmtJPY(Math.abs(plJPY))}</td>
-      <td class="${plClass(plPct)}">${pctStr(plPct)}</td>
-      <td><div class="actions">
-        <button class="btn-edit"   onclick="editStock('${s.id}')">編集</button>
-        <button class="btn-sell"   onclick="openSellModal('${s.id}')">売却</button>
-        <button class="btn-danger" onclick="deleteStock('${s.id}')">削除</button>
-      </div></td>
-    </tr>`;
-  }).join('');
+  const existingRows = new Map([...tbody.querySelectorAll('tr[data-stock-id]')].map(row => [row.dataset.stockId, row]));
+  const canPatchRows = priceOnly && existingRows.size === list.length;
+  if (canPatchRows) {
+    list.forEach(s => {
+      const row = existingRows.get(s.id);
+      if (row) row.outerHTML = stockRowHTML(s);
+    });
+    // 価格依存ソートでも tbody 自体は作り直さず、既存行を新しい順序へ移動する。
+    const refreshedRows = new Map([...tbody.querySelectorAll('tr[data-stock-id]')].map(row => [row.dataset.stockId, row]));
+    list.forEach(s => { const row = refreshedRows.get(s.id); if (row) tbody.appendChild(row); });
+  } else {
+    tbody.innerHTML = list.map(stockRowHTML).join('');
+  }
 
   ['ticker','quantity','avgPrice','currentPrice','value','dayPL','pl','plPct'].forEach(k => {
     const el = document.getElementById('sort-'+k);
@@ -2640,6 +2963,54 @@ document.querySelectorAll('.table-wrap thead th[onclick]').forEach(th => {
   th.addEventListener('keydown', e => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); th.click(); }
   });
+});
+
+// クリック可能なカードと開閉見出しをキーボードでも操作可能にする。
+document.querySelectorAll('.card-interactive, .pie-card, .collateral-header').forEach(el => {
+  el.addEventListener('keydown', e => {
+    if (e.target !== el) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+  });
+});
+
+// すべてのモーダルに role、フォーカストラップ、閉じた後のフォーカス復元を付与。
+const _modalReturnFocus = new WeakMap();
+document.querySelectorAll('.overlay').forEach((overlay, index) => {
+  const dialog = overlay.querySelector('.modal');
+  if (!dialog) return;
+  const heading = dialog.querySelector('h2');
+  if (heading && !heading.id) heading.id = `dialogTitle${index}`;
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  if (heading) dialog.setAttribute('aria-labelledby', heading.id);
+  dialog.tabIndex = -1;
+  overlay.setAttribute('aria-hidden', overlay.classList.contains('open') ? 'false' : 'true');
+  new MutationObserver(() => {
+    const open = overlay.classList.contains('open');
+    overlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) {
+      if (!overlay.contains(document.activeElement)) _modalReturnFocus.set(overlay, document.activeElement);
+      if (!overlay.contains(document.activeElement)) {
+        (dialog.querySelector('input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])') || dialog).focus();
+      }
+    } else {
+      const previous = _modalReturnFocus.get(overlay);
+      if (previous?.isConnected) previous.focus();
+      _modalReturnFocus.delete(overlay);
+    }
+  }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return;
+  const overlay = [...document.querySelectorAll('.overlay.open')].at(-1);
+  if (!overlay) return;
+  const focusable = [...overlay.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')]
+    .filter(el => el.offsetParent !== null);
+  if (!focusable.length) { e.preventDefault(); overlay.querySelector('.modal')?.focus(); return; }
+  const first = focusable[0], last = focusable.at(-1);
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
 // ── モーダル ──────────────────────────────────────────────────────
@@ -2672,13 +3043,11 @@ function closeModal(e) {
 }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    document.getElementById('overlay').classList.remove('open');
-    document.getElementById('syncOverlay')?.classList.remove('open');
-    document.getElementById('pieOverlay')?.classList.remove('open');
-    document.getElementById('sellOverlay')?.classList.remove('open');
-    document.getElementById('txOverlay')?.classList.remove('open');
-    document.getElementById('sbiImportOverlay')?.classList.remove('open');
+    const openOverlays = [...document.querySelectorAll('.overlay.open')];
+    openOverlays.at(-1)?.classList.remove('open');
+    closeToolbarMore();
     editId = null;
+    watchlistEditId = null;
   }
 });
 function onMarketChange() {
@@ -2827,6 +3196,170 @@ function deleteStock(id) {
       toast(`${removed.ticker} を復元しました`, 'success');
     },
   });
+}
+
+// ── 買いたい候補 ──────────────────────────────────────────────────
+function watchCardHTML(item) {
+  const badge = item.market === 'JP' ? 'badge-jp' : item.market === 'US' ? 'badge-us' : item.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
+  const marketLabel = item.market === 'CRYPTO' ? '暗号資産' : getMarketLabel(item.market);
+  const current = Number(item.currentPrice);
+  const target = Number(item.targetPrice);
+  const hasPrice = Number.isFinite(current) && current > 0;
+  const gapPct = hasPrice && target > 0 ? (current / target - 1) * 100 : null;
+  const reached = gapPct != null && gapPct <= 0;
+  const status = gapPct == null
+    ? '<span class="neutral">価格未取得</span>'
+    : reached
+      ? `<span class="profit">✓ 目標価格以下（${Math.abs(gapPct).toFixed(1)}%）</span>`
+      : `<span style="color:var(--yellow)">目標より ${gapPct.toFixed(1)}% 上</span>`;
+  const fetchIcon = item.fetchError
+    ? `<span class="fetch-err" title="${esc(item.fetchError)}">⚠</span>`
+    : item.lastFetched ? '<span class="fetch-ok" title="価格取得済み">✓</span>' : '';
+  return `<article class="watch-card" data-watch-id="${esc(item.id)}">
+    <div class="watch-card-top">
+      <div class="watch-card-name">
+        <div class="ticker">${esc(item.ticker)}<span class="badge ${badge}">${marketLabel}</span>${fetchIcon}</div>
+        <div class="ticker-name" title="${esc(item.name)}">${esc(item.name)}</div>
+      </div>
+    </div>
+    <div class="watch-prices">
+      <div class="watch-price"><span class="watch-price-label">現在価格</span><span class="watch-price-value">${hasPrice ? fmtPrice(current, item.currency) : '—'}</span></div>
+      <div class="watch-price"><span class="watch-price-label">目標価格</span><span class="watch-price-value">${fmtPrice(target, item.currency)}</span></div>
+    </div>
+    <div class="watch-status">${status}</div>
+    ${item.note ? `<div class="watch-note" title="${esc(item.note)}">${esc(item.note)}</div>` : ''}
+    <div class="watch-actions">
+      <button class="btn-edit" onclick="addWatchlistToPortfolio('${esc(item.id)}')">保有へ</button>
+      <button class="btn-edit" onclick="openWatchlistModal('${esc(item.id)}')">編集</button>
+      <button class="btn-danger" onclick="deleteWatchlistItem('${esc(item.id)}')">削除</button>
+    </div>
+  </article>`;
+}
+
+function renderWatchlist(priceOnly = false) {
+  const grid = document.getElementById('watchlistGrid');
+  if (!grid) return;
+  document.getElementById('watchlistCount').textContent = `${watchlist.length}件`;
+  if (!watchlist.length) {
+    grid.className = 'watch-empty';
+    grid.innerHTML = '気になる銘柄と目標価格を登録すると、現在価格との差を自動で確認できます。';
+    return;
+  }
+  grid.className = 'watchlist-grid';
+  const existing = new Map([...grid.querySelectorAll('[data-watch-id]')].map(card => [card.dataset.watchId, card]));
+  if (priceOnly && existing.size === watchlist.length) {
+    watchlist.forEach(item => {
+      const card = existing.get(item.id);
+      if (card) card.outerHTML = watchCardHTML(item);
+    });
+  } else {
+    grid.innerHTML = watchlist.map(watchCardHTML).join('');
+  }
+}
+
+function openWatchlistModal(id = null) {
+  watchlistEditId = id;
+  const item = id ? watchlist.find(value => value.id === id) : null;
+  document.getElementById('watchlistModalTitle').textContent = item ? '買いたい候補を編集' : '買いたい候補を追加';
+  document.getElementById('wMarket').value = item?.market || 'JP';
+  document.getElementById('wTicker').value = item?.ticker || '';
+  document.getElementById('wName').value = item?.name || '';
+  document.getElementById('wTargetPrice').value = item?.targetPrice || '';
+  document.getElementById('wNote').value = item?.note || '';
+  document.getElementById('wNameHint').style.display = 'none';
+  onWatchlistMarketChange();
+  document.getElementById('watchlistOverlay').classList.add('open');
+  document.getElementById('wTicker').focus();
+}
+
+function closeWatchlistModal(e) {
+  if (e && e.target !== document.getElementById('watchlistOverlay')) return;
+  document.getElementById('watchlistOverlay').classList.remove('open');
+  watchlistEditId = null;
+}
+
+function onWatchlistMarketChange() {
+  const market = document.getElementById('wMarket').value;
+  const hints = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁', CRYPTO:'暗号資産ティッカー (例: BTC)' };
+  document.getElementById('wTickerHint').textContent = hints[market] || '';
+  document.getElementById('wTargetLabel').textContent = market === 'FUND'
+    ? '目標価格 (円/口) *'
+    : `目標価格 (${getCurrency(market) === 'USD' ? '$' : '¥'}) *`;
+}
+
+let _watchNameFetchTimer = null;
+function onWatchlistTickerInput() {
+  const ticker = document.getElementById('wTicker').value.trim().toUpperCase();
+  const marketEl = document.getElementById('wMarket');
+  if (marketEl.value === 'JP') {
+    marketEl.value = detectMarketFromTicker(ticker);
+    onWatchlistMarketChange();
+  }
+  clearTimeout(_watchNameFetchTimer);
+  const minLen = ['US','CRYPTO'].includes(marketEl.value) ? 1 : marketEl.value === 'FUND' ? 8 : 4;
+  if (ticker.length >= minLen) _watchNameFetchTimer = setTimeout(() => autoFetchWatchlistName(ticker, marketEl.value), 500);
+}
+
+async function autoFetchWatchlistName(ticker, market) {
+  const nameEl = document.getElementById('wName');
+  if (nameEl.value) return;
+  const hint = document.getElementById('wNameHint');
+  hint.style.display = '';
+  try {
+    const name = await fetchSecurityName(ticker, market);
+    if (name && !nameEl.value) nameEl.value = name;
+  } catch(e) {
+  } finally {
+    hint.style.display = 'none';
+  }
+}
+
+function saveWatchlistItem() {
+  const market = document.getElementById('wMarket').value;
+  const ticker = document.getElementById('wTicker').value.trim().toUpperCase();
+  const name = document.getElementById('wName').value.trim();
+  const targetPrice = Number(document.getElementById('wTargetPrice').value);
+  const note = document.getElementById('wNote').value.trim();
+  if (!ticker || !name || !(targetPrice > 0)) { toast('銘柄名と目標価格を入力してください', 'error'); return; }
+  const duplicate = watchlist.find(item => item.id !== watchlistEditId && item.market === market && item.ticker === ticker);
+  if (duplicate) { toast(`${ticker} は候補に登録済みです`, 'error'); return; }
+  const common = { ticker, yahooTicker: getYahooTicker(ticker, market), name, market, currency: getCurrency(market), targetPrice, note };
+  if (watchlistEditId) {
+    const index = watchlist.findIndex(item => item.id === watchlistEditId);
+    if (index >= 0) watchlist[index] = migrateWatchlistItem({ ...watchlist[index], ...common });
+    toast(`${ticker} の候補を更新しました`, 'success');
+  } else {
+    watchlist.push(migrateWatchlistItem({ id: uid(), ...common }));
+    toast(`${ticker} を買いたい候補に追加しました`, 'success');
+  }
+  save();
+  renderWatchlist();
+  closeWatchlistModal();
+  setTimeout(fetchAllPrices, 200);
+}
+
+function deleteWatchlistItem(id) {
+  const index = watchlist.findIndex(item => item.id === id);
+  if (index < 0) return;
+  const [removed] = watchlist.splice(index, 1);
+  save(); renderWatchlist();
+  toast(`${removed.ticker} を候補から削除しました`, 'success', {
+    label: '元に戻す',
+    onClick: () => { watchlist.splice(Math.min(index, watchlist.length), 0, removed); save(); renderWatchlist(); },
+  });
+}
+
+function addWatchlistToPortfolio(id) {
+  const item = watchlist.find(value => value.id === id);
+  if (!item) return;
+  openModal();
+  document.getElementById('fMarket').value = item.market;
+  document.getElementById('fTicker').value = item.ticker;
+  document.getElementById('fName').value = item.name;
+  document.getElementById('fAvg').value = item.currentPrice || item.targetPrice;
+  document.getElementById('fNote').value = item.note;
+  onMarketChange();
+  document.getElementById('fQty').focus();
 }
 
 // ── 売却 / 実現損益 ───────────────────────────────────────────────
@@ -3944,6 +4477,7 @@ function toggleCollateral() {
   collateralOpen = !collateralOpen;
   document.getElementById('collateralBody').classList.toggle('open', collateralOpen);
   document.getElementById('collateralHeader').classList.toggle('open', collateralOpen);
+  document.getElementById('collateralHeader').setAttribute('aria-expanded', String(collateralOpen));
   document.getElementById('collateralToggleIcon').textContent = collateralOpen ? '▼' : '▶';
 }
 
