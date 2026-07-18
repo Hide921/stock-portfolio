@@ -8,6 +8,7 @@ import logging
 import threading
 import webbrowser
 import concurrent.futures
+from html import unescape as html_unescape
 from urllib.parse import urlparse
 
 import time
@@ -1712,22 +1713,35 @@ def get_history():
 def get_name():
     """
     GET /api/name?ticker=03319172.T
-    銘柄名を返す。投資信託は Yahoo Finance Japan から、株式は yfinance から取得。
+    銘柄名を返す。日本株・投資信託は Yahoo Finance Japan の日本語名を優先する。
     """
     ticker = request.args.get('ticker', '').strip()
     if not ticker:
         return jsonify({'name': '', 'error': 'ticker が必要です'}), 400
     try:
-        if is_fund_ticker(ticker):
-            fund_code = ticker[:-2]
-            url = f'https://finance.yahoo.co.jp/quote/{fund_code}'
-            r = _yfjp_get(url, timeout=10)
-            r.raise_for_status()
-            # <title> からファンド名を抽出
-            m = re.search(r'<title>\s*(.+?)(?:【|\[|\|)', r.text)
-            name = m.group(1).strip() if m else ''
-            logging.info(f'NAME FUND {fund_code}: {name!r}')
-            return jsonify({'name': name})
+        if ticker.upper().endswith('.T'):
+            quote_id = ticker[:-2] if is_fund_ticker(ticker) else ticker
+            name = ''
+            last_error = None
+            for suffix in ('/chart', ''):
+                try:
+                    url = f'https://finance.yahoo.co.jp/quote/{quote_id}{suffix}'
+                    r = _yfjp_get(url, timeout=10)
+                    r.raise_for_status()
+                    if any(marker in r.text for marker in ('表示できません', 'ご覧になろうとしているページ', 'Just a moment')):
+                        continue
+                    m = re.search(r'<title[^>]*>\s*(.+?)\s*</title>', r.text, re.IGNORECASE | re.DOTALL)
+                    if m:
+                        title = html_unescape(re.sub(r'<[^>]+>', '', m.group(1))).strip()
+                        name = re.split(r'【|〖|\[|\||：', title, maxsplit=1)[0].strip()
+                    if name:
+                        break
+                except Exception as e:
+                    last_error = e
+            if not name and last_error:
+                raise last_error
+            logging.info(f'NAME JP {quote_id}: {name!r}')
+            return jsonify({'name': name, 'locale': 'ja-JP'})
         else:
             import urllib.parse as _up
             url = f'https://query2.finance.yahoo.com/v8/finance/chart/{_up.quote(ticker)}?interval=1d&range=5d'
@@ -1736,7 +1750,7 @@ def get_name():
             meta = r.json().get('chart', {}).get('result', [{}])[0].get('meta', {})
             name = meta.get('shortName') or meta.get('longName') or ''
             logging.info(f'NAME {ticker}: {name!r}')
-            return jsonify({'name': name})
+            return jsonify({'name': name, 'locale': 'en-US'})
     except Exception as e:
         logging.warning(f'NAME ERR {ticker}: {e}')
         return jsonify({'name': '', 'error': str(e)})

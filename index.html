@@ -990,13 +990,13 @@ function extractPreloadedState(html) {
   return null;
 }
 
-async function fetchFundPage(fundCode) {
+async function fetchJapaneseQuotePage(quoteId) {
   // /chart URL は Render プロキシ経由（海外IP）でもアクセス可能。
   // /quote/{code} は Yahoo Japan の IP 制限でブロックされることがある。
   const BLOCK_MARKERS = ['表示できません', 'ご覧になろうとしているページ', 'Just a moment'];
   const urlsToTry = [
-    YF_JP_BASE + encodeURIComponent(fundCode) + '/chart',
-    YF_JP_BASE + encodeURIComponent(fundCode),
+    YF_JP_BASE + encodeURIComponent(quoteId) + '/chart',
+    YF_JP_BASE + encodeURIComponent(quoteId),
   ];
   let lastErr;
   for (const url of urlsToTry) {
@@ -1007,6 +1007,10 @@ async function fetchFundPage(fundCode) {
     } catch(e) { lastErr = e; }
   }
   throw lastErr || new Error('YFJP fetch failed');
+}
+
+async function fetchFundPage(fundCode) {
+  return await fetchJapaneseQuotePage(fundCode);
 }
 
 async function getCurrentPriceFundJS(ticker) {
@@ -1030,10 +1034,37 @@ async function getCurrentPriceFundJS(ticker) {
   };
 }
 
-async function getFundNameJS(ticker) {
-  const html = await fetchFundPage(ticker.replace(/\.T$/, ''));
-  const m = html.match(/<title>\s*(.+?)(?:【|\[|\|)/);
-  return m ? m[1].trim() : '';
+function extractJapaneseSecurityName(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return (doc.title || '').split(/【|〖|\[|\||：/, 1)[0].trim();
+}
+
+async function getJapaneseSecurityNameJS(ticker, market) {
+  const quoteId = market === 'FUND' ? ticker.replace(/\.T$/, '') : ticker;
+  const html = await fetchJapaneseQuotePage(quoteId);
+  return extractJapaneseSecurityName(html);
+}
+
+async function fetchSecurityName(ticker, market) {
+  const yahooTicker = getYahooTicker(ticker, market);
+  try {
+    if (API_BASE) await wakeRender();
+    const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
+      signal: AbortSignal.timeout(15000),
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const needsJapaneseName = market === 'JP' || market === 'FUND';
+      if (data.name && (!needsJapaneseName || data.locale === 'ja-JP')) return data.name.trim();
+    }
+  } catch(e) {}
+
+  if (market === 'JP' || market === 'FUND') {
+    return await getJapaneseSecurityNameJS(yahooTicker, market);
+  }
+  const result = await yhFetch(yahooTicker, '?interval=1d&range=5d');
+  return result.meta.shortName || result.meta.longName || '';
 }
 
 async function fetchViaProxy(url) {
@@ -1236,6 +1267,9 @@ function getYahooTicker(ticker, market) {
   return t + '.T';
 }
 function getCurrency(market) { return (market === 'US' || market === 'CRYPTO') ? 'USD' : 'JPY'; }
+function getMarketLabel(market) {
+  return ({ JP: '日本株', FUND: '投資信託' })[market] || market;
+}
 function toJPY(v, cur)       { return cur === 'USD' ? v * usdJpyRate : v; }
 function getCostJPY(s)       { return toJPY(s.avgPrice * s.quantity, s.avgCurrency || s.currency); }
 function getStockPLJPY(s)    { return toJPY(s.currentPrice * s.quantity, s.currency) - getCostJPY(s); }
@@ -1633,6 +1667,7 @@ async function sbLoad(silent = false) {
   } finally {
     isSyncing = false;
     initialLoadDone = true; // 起動時sbLoad完了 → 以降のsave()はアップロード可能
+    setTimeout(localizeJapaneseNames, 0);
   }
 }
 
@@ -1861,6 +1896,7 @@ function bootLibsReady() {
   } else {
     console.warn('supabase 未ロード: クラウド同期は無効（ローカルのみで動作）');
     updateSyncIcon('error');
+    setTimeout(localizeJapaneseNames, 0);
   }
 }
 if (document.readyState === 'loading') {
@@ -2547,7 +2583,7 @@ function render() {
     const dayChg  = (prevUnit != null && prevUnit > 0) ? (unitDayChange / prevUnit * 100) : null;
     const dayPLraw = unitDayChange != null ? toJPY(unitDayChange * s.quantity, s.currency) : null;
     const badge  = s.market === 'JP' ? 'badge-jp' : s.market === 'US' ? 'badge-us' : s.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
-    const mLabel = s.market === 'FUND' ? '投信' : s.market === 'CRYPTO' ? 'BTC' : s.market;
+    const mLabel = s.market === 'CRYPTO' ? 'BTC' : getMarketLabel(s.market);
     const unit   = s.market === 'FUND' ? '口' : s.market === 'CRYPTO' ? '枚' : '株';
     const fetchIcon = s.lastFetched
       ? (s.fetchError === 'キャッシュ'
@@ -2687,38 +2723,55 @@ async function autoFetchName(ticker, market) {
   const hint = document.getElementById('nameHint');
   hint.style.display = '';
   try {
-    const yahooTicker = getYahooTicker(ticker, market);
-    let name = '';
-    if (isFundTicker(yahooTicker)) {
-      // 投資信託: まずクライアントサイドで取得 (GitHub Pages でも動作)
-      try {
-        name = await getFundNameJS(yahooTicker);
-      } catch(e) {
-        // ローカル Flask サーバー経由にフォールバック
-        const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
-          signal: AbortSignal.timeout(8000),
-        });
-        if (res.ok) { const d = await res.json(); name = d.name || ''; }
-      }
-    } else {
-      if (API_BASE) {
-        // Render が起動するまで待機（Free プランは最大60秒かかる場合あり）
-        // 「取得中…」がそのまま表示され続けるので UX 的に問題ない
-        await wakeRender();
-        const res = await fetch(`${API_BASE}/api/name?ticker=${encodeURIComponent(yahooTicker)}`, {
-          signal: AbortSignal.timeout(10000),
-        });
-        if (res.ok) { const d = await res.json(); name = d.name || ''; }
-      } else {
-        // ローカル環境: Yahoo Finance Chart API 経由（プロキシ不要）
-        const r = await yhFetch(yahooTicker, '?interval=1d&range=5d');
-        name = r.meta.shortName || r.meta.longName || '';
-      }
-    }
+    const name = await fetchSecurityName(ticker, market);
     if (name && !nameEl.value) nameEl.value = name;
   } catch(e) {
   } finally {
     hint.style.display = 'none';
+  }
+}
+
+let _localizingJapaneseNames = false;
+async function localizeJapaneseNames() {
+  if (_localizingJapaneseNames) return;
+  const targets = stocks.filter(s =>
+    (s.market === 'JP' || s.market === 'FUND') && s.nameLocale !== 'ja-JP'
+  );
+  if (!targets.length) return;
+
+  _localizingJapaneseNames = true;
+  try {
+    const results = [];
+    for (let i = 0; i < targets.length; i += 4) {
+      const batch = await Promise.allSettled(targets.slice(i, i + 4).map(async s => ({
+        id: s.id,
+        name: await fetchSecurityName(s.ticker, s.market),
+      })));
+      results.push(...batch);
+    }
+    let changed = false;
+    const namesById = new Map();
+    results.forEach(result => {
+      if (result.status !== 'fulfilled') return;
+      const name = result.value.name?.trim();
+      if (!name) return;
+      namesById.set(result.value.id, name);
+    });
+    if (namesById.size) {
+      stocks = stocks.map(s => {
+        const name = namesById.get(s.id);
+        if (!name) return s;
+        changed = true;
+        return { ...s, name, nameLocale: 'ja-JP' };
+      });
+    }
+    if (changed) {
+      save();
+      render();
+      renderPieChart();
+    }
+  } finally {
+    _localizingJapaneseNames = false;
   }
 }
 function saveStock() {
@@ -2754,6 +2807,7 @@ function saveStock() {
   save(); render(); renderPieChart();
   document.getElementById('overlay').classList.remove('open');
   editId = null;
+  setTimeout(localizeJapaneseNames, 0);
   // 新規追加時は自動で価格取得
   if (isNew) setTimeout(fetchAllPrices, 200);
 }
@@ -3576,7 +3630,7 @@ function renderImportPreview(headers, colMap) {
       <tr class="${skipped ? 'skip' : ''}">
         <td>${esc(r.ticker)}</td>
         <td class="import-name-cell" data-idx="${i}">${nameCell}</td>
-        <td>${esc(r.market)}</td>
+        <td>${esc(getMarketLabel(r.market))}</td>
         <td>${esc(tradeLabel[r.tradeType] || r.tradeType)}</td>
         <td>${esc(accountLabel[r.accountType] || r.accountType)}</td>
         <td>${r.quantity > 0 ? r.quantity.toLocaleString() : '—'}</td>
@@ -3600,15 +3654,8 @@ async function fetchImportNames() {
 
   await Promise.allSettled(
     pending.map(async ({ r, i }) => {
-      // CRYPTO の -USD 付与・SBI 7桁コードのゼロ埋めも含めて正規化
-      const yahooTicker = getYahooTicker(r.ticker, r.market);
       try {
-        if (isFundTicker(yahooTicker)) {
-          r.name = await getFundNameJS(yahooTicker);
-        } else {
-          const result = await yhFetch(yahooTicker, '?interval=1d&range=5d');
-          r.name = result.meta.shortName || result.meta.longName || '';
-        }
+        r.name = await fetchSecurityName(r.ticker, r.market);
       } catch(e) {
         // 取得失敗は無視（名前なしのまま）
       }
@@ -3662,6 +3709,7 @@ function executeImport() {
     },
   } : null;
   toast(`${toAdd.length} 件を${replaceMode ? '復元' : 'インポート'}しました`, 'success', undo);
+  setTimeout(localizeJapaneseNames, 0);
   // インポート後は最新価格を取得
   setTimeout(fetchAllPrices, 200);
 }
@@ -3798,7 +3846,7 @@ function _renderRebalance() {
     const alertBadge = isAlert ? `<span class="rb-alert-badge">¥20万超</span>` : '';
     return `<tr class="${isAlert ? 'rb-alert' : ''}">
       <td>
-        <div class="ticker">${esc(s.ticker)}<span class="badge ${badgeCls}">${s.market}</span></div>
+        <div class="ticker">${esc(s.ticker)}<span class="badge ${badgeCls}">${getMarketLabel(s.market)}</span></div>
         <div class="ticker-name">${esc(s.name)}</div>
       </td>
       <td>${fmtJPY(valueJPY)}</td>
