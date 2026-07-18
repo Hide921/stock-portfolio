@@ -4064,10 +4064,11 @@ function toast(msg, type = 'success', action = null) {
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW register failed:', err));
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(registration => registration.update())
+      .catch(err => console.warn('SW register failed:', err));
   });
-  // 起動はキャッシュ即表示（cache-first）。裏で新版を取得し中身が変われば
-  // SW が NEW_VERSION を通知 → その場で更新できるトーストを表示する。
+  // Service Worker 更新後は NEW_VERSION 通知を受け取り、その場で更新できるようにする。
   let _updateToastShown = false;
   navigator.serviceWorker.addEventListener('message', e => {
     if (e.data && e.data.type === 'NEW_VERSION' && !_updateToastShown) {
