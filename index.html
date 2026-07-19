@@ -204,9 +204,11 @@
     /* ── 買いたい候補 ── */
     .watchlist-section { margin-bottom: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
     .watchlist-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
-    .watchlist-title-wrap { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+    .watchlist-title-wrap { display: flex; align-items: baseline; gap: 9px; min-width: 0; flex-wrap: wrap; }
     .watchlist-title { font-size: 13px; font-weight: 700; }
     .watchlist-count { color: var(--text-muted); font-size: 11px; }
+    .watchlist-total { color: var(--accent); font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .watchlist-unset { color: var(--yellow); font-size: 10px; font-weight: 500; }
     .watchlist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 10px; padding: 12px; }
     .watch-card { min-width: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
     .watch-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
@@ -565,6 +567,7 @@
       <div class="watchlist-title-wrap">
         <h2 class="watchlist-title" id="watchlistTitle">⭐ 買いたい候補</h2>
         <span class="watchlist-count" id="watchlistCount">0件</span>
+        <span class="watchlist-total" id="watchlistTotal" role="status" aria-live="polite">購入予定合計 ¥0</span>
       </div>
       <button class="btn-primary" onclick="openWatchlistModal()">+ 候補を追加</button>
     </div>
@@ -3415,6 +3418,14 @@ function renderWatchlist(priceOnly = false) {
   const grid = document.getElementById('watchlistGrid');
   if (!grid) return;
   document.getElementById('watchlistCount').textContent = `${watchlist.length}件`;
+  const purchaseTotalJPY = watchlist.reduce((sum, item) => {
+    const amount = Number(item.purchaseAmountJPY);
+    return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+  }, 0);
+  const unsetPurchaseCount = watchlist.filter(item => !(Number(item.purchaseAmountJPY) > 0)).length;
+  document.getElementById('watchlistTotal').innerHTML =
+    `購入予定合計 ${fmtJPY(purchaseTotalJPY)}` +
+    (unsetPurchaseCount ? ` <span class="watchlist-unset">（未設定${unsetPurchaseCount}件）</span>` : '');
   if (!watchlist.length) {
     grid.className = 'watch-empty';
     grid.innerHTML = '気になる銘柄と購入予定額を登録すると、現在価格で買える数量を自動で確認できます。';
