@@ -671,12 +671,12 @@
         <input type="text" id="fSector" placeholder="例: 自動車">
       </div>
       <div class="form-group">
-        <label id="qtyLabel">保有数量 (株) *</label>
-        <input type="number" id="fQty" placeholder="100" min="0" step="1" inputmode="numeric">
+        <label for="fQty" id="qtyLabel">保有数量 (株) *</label>
+        <input type="text" id="fQty" placeholder="100" inputmode="decimal" oninput="formatNumericInput(this)" onblur="normalizeNumericInput(this)" autocomplete="off">
       </div>
       <div class="form-group">
-        <label id="avgLabel">平均取得価格 *</label>
-        <input type="number" id="fAvg" placeholder="2500" min="0" step="0.01" inputmode="decimal">
+        <label for="fAvg" id="avgLabel">平均取得価格 *</label>
+        <input type="text" id="fAvg" placeholder="2,500" inputmode="decimal" oninput="formatNumericInput(this)" onblur="normalizeNumericInput(this)" autocomplete="off">
       </div>
       <div class="form-group" id="avgCurGroup" style="display:none">
         <label>取得単価の通貨</label>
@@ -723,7 +723,7 @@
       </div>
       <div class="form-group full">
         <label for="wPurchaseAmount">購入予定額 (円) *</label>
-        <input type="number" id="wPurchaseAmount" min="1" step="1000" inputmode="numeric" placeholder="例: 100000">
+        <input type="text" id="wPurchaseAmount" inputmode="numeric" placeholder="例: 100,000" oninput="formatNumericInput(this, false)" onblur="normalizeNumericInput(this, false)" autocomplete="off">
         <span class="form-hint">現在価格と為替レートから購入可能数量を自動計算します（手数料を除く概算）</span>
       </div>
       <div class="form-group full">
@@ -1379,6 +1379,65 @@ let watchlistEditId    = null;
 
 // ── Helpers ───────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+function numericInputRaw(value, allowDecimal = true) {
+  const text = String(value ?? '')
+    .replace(/[０-９]/g, char => String.fromCharCode(char.charCodeAt(0) - 0xFEE0))
+    .replace(/[．。]/g, '.')
+    .replace(/[，、]/g, ',');
+  let raw = '';
+  let hasDecimal = false;
+  for (const char of text) {
+    if (/\d/.test(char)) raw += char;
+    else if (char === '.') {
+      if (!allowDecimal) break;
+      if (!hasDecimal) { raw += char; hasDecimal = true; }
+    }
+  }
+  return raw;
+}
+
+function formatNumericText(value, allowDecimal = true) {
+  const raw = numericInputRaw(value, allowDecimal);
+  if (!raw) return '';
+  const hasDecimal = allowDecimal && raw.includes('.');
+  const [integerRaw, decimal = ''] = raw.split('.');
+  const integer = (integerRaw || '0').replace(/^0+(?=\d)/, '');
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return hasDecimal ? `${grouped}.${decimal}` : grouped;
+}
+
+function formatNumericInput(input, allowDecimal = true) {
+  const cursor = input.selectionStart ?? input.value.length;
+  const meaningfulBeforeCursor = numericInputRaw(input.value.slice(0, cursor), allowDecimal).length;
+  const formatted = formatNumericText(input.value, allowDecimal);
+  input.value = formatted;
+  let nextCursor = 0;
+  let meaningfulCount = 0;
+  while (nextCursor < formatted.length && meaningfulCount < meaningfulBeforeCursor) {
+    if (formatted[nextCursor] !== ',') meaningfulCount++;
+    nextCursor++;
+  }
+  input.setSelectionRange(nextCursor, nextCursor);
+}
+
+function parseNumericInput(value, allowDecimal = true) {
+  const raw = numericInputRaw(value, allowDecimal);
+  if (!raw || raw === '.') return NaN;
+  return Number(raw);
+}
+
+function formatNumericValue(value) {
+  if (value == null || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return number.toLocaleString('ja-JP', { useGrouping:true, maximumFractionDigits:12 });
+}
+
+function normalizeNumericInput(input, allowDecimal = true) {
+  const number = parseNumericInput(input.value, allowDecimal);
+  input.value = Number.isFinite(number) ? formatNumericValue(number) : '';
+}
 
 function getYahooTicker(ticker, market) {
   const t = (ticker || '').trim().toUpperCase();
@@ -3026,8 +3085,8 @@ function openModal(id = null) {
   document.getElementById('fTicker').value     = s?.ticker     || '';
   document.getElementById('fName').value    = s?.name     || '';
   document.getElementById('fSector').value  = s?.sector   || '';
-  document.getElementById('fQty').value     = s?.quantity || '';
-  document.getElementById('fAvg').value     = s?.avgPrice || '';
+  document.getElementById('fQty').value     = formatNumericValue(s?.quantity);
+  document.getElementById('fAvg').value     = formatNumericValue(s?.avgPrice);
   document.getElementById('fNote').value    = s?.note || '';
   document.getElementById('nameHint').style.display = 'none';
   if ((s?.market || 'JP') === 'CRYPTO') {
@@ -3151,8 +3210,8 @@ function saveStock() {
   const ticker     = document.getElementById('fTicker').value.trim().toUpperCase();
   const name       = document.getElementById('fName').value.trim();
   const sector  = document.getElementById('fSector').value.trim();
-  const qty     = parseFloat(document.getElementById('fQty').value);
-  const avg     = parseFloat(document.getElementById('fAvg').value);
+  const qty     = parseNumericInput(document.getElementById('fQty').value);
+  const avg     = parseNumericInput(document.getElementById('fAvg').value);
   const note    = document.getElementById('fNote').value.trim();
 
   if (!ticker || !name || isNaN(qty) || isNaN(avg)) { toast('必須項目を入力してください', 'error'); return; }
@@ -3282,7 +3341,7 @@ function openWatchlistModal(id = null) {
   document.getElementById('wMarket').value = item?.market || 'JP';
   document.getElementById('wTicker').value = item?.ticker || '';
   document.getElementById('wName').value = item?.name || '';
-  document.getElementById('wPurchaseAmount').value = item?.purchaseAmountJPY || '';
+  document.getElementById('wPurchaseAmount').value = formatNumericValue(item?.purchaseAmountJPY);
   document.getElementById('wNote').value = item?.note || '';
   document.getElementById('wNameHint').style.display = 'none';
   onWatchlistMarketChange();
@@ -3333,7 +3392,7 @@ function saveWatchlistItem() {
   const market = document.getElementById('wMarket').value;
   const ticker = document.getElementById('wTicker').value.trim().toUpperCase();
   const name = document.getElementById('wName').value.trim();
-  const purchaseAmountJPY = Number(document.getElementById('wPurchaseAmount').value);
+  const purchaseAmountJPY = parseNumericInput(document.getElementById('wPurchaseAmount').value, false);
   const note = document.getElementById('wNote').value.trim();
   if (!ticker || !name || !(purchaseAmountJPY > 0)) { toast('銘柄名と購入予定額を入力してください', 'error'); return; }
   const duplicate = watchlist.find(item => item.id !== watchlistEditId && item.market === market && item.ticker === ticker);
@@ -3380,11 +3439,11 @@ function addWatchlistToPortfolio(id) {
   document.getElementById('fMarket').value = item.market;
   document.getElementById('fTicker').value = item.ticker;
   document.getElementById('fName').value = item.name;
-  document.getElementById('fAvg').value = item.currentPrice || '';
+  document.getElementById('fAvg').value = formatNumericValue(item.currentPrice);
   document.getElementById('fNote').value = item.note;
   onMarketChange();
   const buyableQuantity = calcWatchlistBuyableQuantity(item);
-  if (buyableQuantity != null) document.getElementById('fQty').value = buyableQuantity;
+  if (buyableQuantity != null) document.getElementById('fQty').value = formatNumericValue(buyableQuantity);
   document.getElementById('fQty').focus();
 }
 

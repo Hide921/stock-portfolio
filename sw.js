@@ -1,7 +1,7 @@
 // ── Service Worker ──────────────────────────────────────────────
 // アプリシェル（HTML/アイコン/CDN）をキャッシュし、オフラインでも起動可能にする。
 // 株価・クラウド同期などの動的データは常にネットワークから取得（キャッシュしない）。
-const CACHE = 'portfolio-v5';
+const CACHE = 'portfolio-v6';
 const SHELL = ['./', './index.html', './favicon.svg', './manifest.json'];
 
 // データ系リクエストはキャッシュせず常にネットワークへ（鮮度が命）
