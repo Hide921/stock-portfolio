@@ -722,8 +722,9 @@
         <span class="form-hint" id="wNameHint" style="display:none">取得中…</span>
       </div>
       <div class="form-group full">
-        <label for="wTargetPrice" id="wTargetLabel">目標価格 (¥) *</label>
-        <input type="number" id="wTargetPrice" min="0" step="0.01" inputmode="decimal" placeholder="買いたい価格">
+        <label for="wPurchaseAmount">購入予定額 (円) *</label>
+        <input type="number" id="wPurchaseAmount" min="1" step="1000" inputmode="numeric" placeholder="例: 100000">
+        <span class="form-hint">現在価格と為替レートから購入可能数量を自動計算します（手数料を除く概算）</span>
       </div>
       <div class="form-group full">
         <label for="wNote">メモ</label>
@@ -1372,7 +1373,7 @@ let collateralOpen    = false;
 let transactions      = [];  // 取引履歴（売買ログ）[{id,date,type,ticker,quantity,price,avgCost,fee,realizedPLJPY,...}, ...]
 const TRANSACTIONS_KEY = 'transactions_v1';
 
-let watchlist          = []; // 買いたい候補 [{id,ticker,name,market,targetPrice,note,...}]
+let watchlist          = []; // 買いたい候補 [{id,ticker,name,market,purchaseAmountJPY,note,...}]
 const WATCHLIST_KEY    = 'watchlist_v1';
 let watchlistEditId    = null;
 
@@ -1573,7 +1574,7 @@ function migrateWatchlistItem(item) {
     name: String(item?.name || ticker),
     market,
     currency: item?.currency || getCurrency(market),
-    targetPrice: Number(item?.targetPrice) || 0,
+    purchaseAmountJPY: Number(item?.purchaseAmountJPY) || 0,
     currentPrice: Number(item?.currentPrice) || null,
     prevClose: Number.isFinite(Number(item?.prevClose)) ? Number(item.prevClose) : null,
     dayChange: Number.isFinite(Number(item?.dayChange)) ? Number(item.dayChange) : null,
@@ -3203,15 +3204,13 @@ function watchCardHTML(item) {
   const badge = item.market === 'JP' ? 'badge-jp' : item.market === 'US' ? 'badge-us' : item.market === 'CRYPTO' ? 'badge-crypto' : 'badge-fund';
   const marketLabel = item.market === 'CRYPTO' ? '暗号資産' : getMarketLabel(item.market);
   const current = Number(item.currentPrice);
-  const target = Number(item.targetPrice);
+  const purchaseAmountJPY = Number(item.purchaseAmountJPY);
   const hasPrice = Number.isFinite(current) && current > 0;
-  const gapPct = hasPrice && target > 0 ? (current / target - 1) * 100 : null;
-  const reached = gapPct != null && gapPct <= 0;
-  const status = gapPct == null
-    ? '<span class="neutral">価格未取得</span>'
-    : reached
-      ? `<span class="profit">✓ 目標価格以下（${Math.abs(gapPct).toFixed(1)}%）</span>`
-      : `<span style="color:var(--yellow)">目標より ${gapPct.toFixed(1)}% 上</span>`;
+  const hasPurchaseAmount = Number.isFinite(purchaseAmountJPY) && purchaseAmountJPY > 0;
+  const buyableQuantity = calcWatchlistBuyableQuantity(item);
+  const status = buyableQuantity == null
+    ? `<span class="neutral">${hasPurchaseAmount ? '価格取得後に購入可能数量を表示' : '購入予定額を設定してください'}</span>`
+    : `<span class="profit">購入可能 ${fmtWatchlistQuantity(buyableQuantity, item.market)}</span><span class="neutral">（手数料を除く概算）</span>`;
   const fetchIcon = item.fetchError
     ? `<span class="fetch-err" title="${esc(item.fetchError)}">⚠</span>`
     : item.lastFetched ? '<span class="fetch-ok" title="価格取得済み">✓</span>' : '';
@@ -3224,7 +3223,7 @@ function watchCardHTML(item) {
     </div>
     <div class="watch-prices">
       <div class="watch-price"><span class="watch-price-label">現在価格</span><span class="watch-price-value">${hasPrice ? fmtPrice(current, item.currency) : '—'}</span></div>
-      <div class="watch-price"><span class="watch-price-label">目標価格</span><span class="watch-price-value">${fmtPrice(target, item.currency)}</span></div>
+      <div class="watch-price"><span class="watch-price-label">購入予定額</span><span class="watch-price-value">${hasPurchaseAmount ? fmtJPY(purchaseAmountJPY) : '未設定'}</span></div>
     </div>
     <div class="watch-status">${status}</div>
     ${item.note ? `<div class="watch-note" title="${esc(item.note)}">${esc(item.note)}</div>` : ''}
@@ -3236,13 +3235,32 @@ function watchCardHTML(item) {
   </article>`;
 }
 
+function calcWatchlistBuyableQuantity(item) {
+  const purchaseAmountJPY = Number(item?.purchaseAmountJPY);
+  const currentPrice = Number(item?.currentPrice);
+  if (!(purchaseAmountJPY > 0) || !(currentPrice > 0)) return null;
+  const unitPriceJPY = toJPY(currentPrice, item.currency || getCurrency(item.market));
+  if (!(unitPriceJPY > 0)) return null;
+  const quantity = purchaseAmountJPY / unitPriceJPY;
+  if (item.market === 'CRYPTO') return Math.floor(quantity * 1e8) / 1e8;
+  return Math.floor(quantity);
+}
+
+function fmtWatchlistQuantity(quantity, market) {
+  const unit = market === 'FUND' ? '口' : market === 'CRYPTO' ? '枚' : '株';
+  const options = market === 'CRYPTO'
+    ? { minimumFractionDigits: 0, maximumFractionDigits: 8 }
+    : { maximumFractionDigits: 0 };
+  return `${quantity.toLocaleString('ja-JP', options)}${unit}`;
+}
+
 function renderWatchlist(priceOnly = false) {
   const grid = document.getElementById('watchlistGrid');
   if (!grid) return;
   document.getElementById('watchlistCount').textContent = `${watchlist.length}件`;
   if (!watchlist.length) {
     grid.className = 'watch-empty';
-    grid.innerHTML = '気になる銘柄と目標価格を登録すると、現在価格との差を自動で確認できます。';
+    grid.innerHTML = '気になる銘柄と購入予定額を登録すると、現在価格で買える数量を自動で確認できます。';
     return;
   }
   grid.className = 'watchlist-grid';
@@ -3264,7 +3282,7 @@ function openWatchlistModal(id = null) {
   document.getElementById('wMarket').value = item?.market || 'JP';
   document.getElementById('wTicker').value = item?.ticker || '';
   document.getElementById('wName').value = item?.name || '';
-  document.getElementById('wTargetPrice').value = item?.targetPrice || '';
+  document.getElementById('wPurchaseAmount').value = item?.purchaseAmountJPY || '';
   document.getElementById('wNote').value = item?.note || '';
   document.getElementById('wNameHint').style.display = 'none';
   onWatchlistMarketChange();
@@ -3282,9 +3300,6 @@ function onWatchlistMarketChange() {
   const market = document.getElementById('wMarket').value;
   const hints = { JP:'証券コード4桁 (例: 7203)', US:'米国株ティッカー (例: AAPL)', FUND:'ファンドコード8桁', CRYPTO:'暗号資産ティッカー (例: BTC)' };
   document.getElementById('wTickerHint').textContent = hints[market] || '';
-  document.getElementById('wTargetLabel').textContent = market === 'FUND'
-    ? '目標価格 (円/口) *'
-    : `目標価格 (${getCurrency(market) === 'USD' ? '$' : '¥'}) *`;
 }
 
 let _watchNameFetchTimer = null;
@@ -3318,15 +3333,24 @@ function saveWatchlistItem() {
   const market = document.getElementById('wMarket').value;
   const ticker = document.getElementById('wTicker').value.trim().toUpperCase();
   const name = document.getElementById('wName').value.trim();
-  const targetPrice = Number(document.getElementById('wTargetPrice').value);
+  const purchaseAmountJPY = Number(document.getElementById('wPurchaseAmount').value);
   const note = document.getElementById('wNote').value.trim();
-  if (!ticker || !name || !(targetPrice > 0)) { toast('銘柄名と目標価格を入力してください', 'error'); return; }
+  if (!ticker || !name || !(purchaseAmountJPY > 0)) { toast('銘柄名と購入予定額を入力してください', 'error'); return; }
   const duplicate = watchlist.find(item => item.id !== watchlistEditId && item.market === market && item.ticker === ticker);
   if (duplicate) { toast(`${ticker} は候補に登録済みです`, 'error'); return; }
-  const common = { ticker, yahooTicker: getYahooTicker(ticker, market), name, market, currency: getCurrency(market), targetPrice, note };
+  const yahooTicker = getYahooTicker(ticker, market);
+  const common = { ticker, yahooTicker, name, market, currency: getCurrency(market), purchaseAmountJPY, note };
   if (watchlistEditId) {
     const index = watchlist.findIndex(item => item.id === watchlistEditId);
-    if (index >= 0) watchlist[index] = migrateWatchlistItem({ ...watchlist[index], ...common });
+    if (index >= 0) {
+      const previous = watchlist[index];
+      const identityChanged = previous.yahooTicker !== yahooTicker;
+      watchlist[index] = migrateWatchlistItem({
+        ...previous,
+        ...common,
+        ...(identityChanged ? { currentPrice:null, prevClose:null, dayChange:null, lastFetched:null, fetchError:null, navDate:null } : {}),
+      });
+    }
     toast(`${ticker} の候補を更新しました`, 'success');
   } else {
     watchlist.push(migrateWatchlistItem({ id: uid(), ...common }));
@@ -3356,9 +3380,11 @@ function addWatchlistToPortfolio(id) {
   document.getElementById('fMarket').value = item.market;
   document.getElementById('fTicker').value = item.ticker;
   document.getElementById('fName').value = item.name;
-  document.getElementById('fAvg').value = item.currentPrice || item.targetPrice;
+  document.getElementById('fAvg').value = item.currentPrice || '';
   document.getElementById('fNote').value = item.note;
   onMarketChange();
+  const buyableQuantity = calcWatchlistBuyableQuantity(item);
+  if (buyableQuantity != null) document.getElementById('fQty').value = buyableQuantity;
   document.getElementById('fQty').focus();
 }
 
