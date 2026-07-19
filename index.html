@@ -690,8 +690,9 @@
         <input type="text" id="fNote" placeholder="自由記述">
       </div>
     </div>
+    <p class="form-hint" style="margin-top:12px">入力途中の内容はこのブラウザー内に自動で一時保存されます（24時間）。</p>
     <div class="modal-actions">
-      <button class="btn-ghost" onclick="closeModal()">キャンセル</button>
+      <button class="btn-ghost" onclick="closeModal(null, true)">キャンセル</button>
       <button class="btn-primary" onclick="saveStock()">保存</button>
     </div>
   </div>
@@ -1348,6 +1349,9 @@ let apiOnline     = false;
 let isFetching    = false;
 let isFetchQueued = false;
 let editId        = null;
+const STOCK_FORM_DRAFT_KEY = 'stock_form_draft_v1';
+let stockFormBaseline = null;
+let stockFormDraftTimer = null;
 let sortKey       = 'value';
 let sortDir       = -1;
 let filterText       = '';
@@ -1437,6 +1441,78 @@ function formatNumericValue(value) {
 function normalizeNumericInput(input, allowDecimal = true) {
   const number = parseNumericInput(input.value, allowDecimal);
   input.value = Number.isFinite(number) ? formatNumericValue(number) : '';
+}
+
+function readStockFormValues() {
+  return {
+    editId,
+    market: document.getElementById('fMarket').value,
+    tradeType: document.getElementById('fTradeType').value,
+    accountType: document.getElementById('fAccountType').value,
+    ticker: document.getElementById('fTicker').value,
+    name: document.getElementById('fName').value,
+    sector: document.getElementById('fSector').value,
+    quantity: document.getElementById('fQty').value,
+    avgPrice: document.getElementById('fAvg').value,
+    avgCurrency: document.getElementById('fAvgCur').value,
+    note: document.getElementById('fNote').value,
+  };
+}
+
+function stockFormSignature(values = readStockFormValues()) {
+  const { savedAt, ...comparable } = values;
+  return JSON.stringify(comparable);
+}
+
+function stockFormHasChanges() {
+  return stockFormBaseline != null && stockFormSignature() !== stockFormBaseline;
+}
+
+function clearStockFormDraft() {
+  clearTimeout(stockFormDraftTimer);
+  stockFormDraftTimer = null;
+  try { localStorage.removeItem(STOCK_FORM_DRAFT_KEY); } catch(e) {}
+}
+
+function saveStockFormDraftNow() {
+  clearTimeout(stockFormDraftTimer);
+  stockFormDraftTimer = null;
+  if (!document.getElementById('overlay').classList.contains('open') || !stockFormHasChanges()) {
+    try { localStorage.removeItem(STOCK_FORM_DRAFT_KEY); } catch(e) {}
+    return;
+  }
+  try {
+    localStorage.setItem(STOCK_FORM_DRAFT_KEY, JSON.stringify({ ...readStockFormValues(), savedAt:Date.now() }));
+  } catch(e) {}
+}
+
+function scheduleStockFormDraft() {
+  clearTimeout(stockFormDraftTimer);
+  stockFormDraftTimer = setTimeout(saveStockFormDraftNow, 120);
+}
+
+function restoreStockFormDraftModal() {
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem(STOCK_FORM_DRAFT_KEY) || 'null'); } catch(e) {}
+  if (!draft || !draft.savedAt || Date.now() - draft.savedAt > 24 * 60 * 60 * 1000) {
+    clearStockFormDraft();
+    return;
+  }
+  const restoreEditId = draft.editId && stocks.some(stock => stock.id === draft.editId) ? draft.editId : null;
+  openModal(restoreEditId, true);
+  document.getElementById('fMarket').value = draft.market || 'JP';
+  document.getElementById('fTradeType').value = draft.tradeType || 'spot';
+  document.getElementById('fAccountType').value = draft.accountType || 'specific';
+  document.getElementById('fAvgCur').value = draft.avgCurrency || getCurrency(draft.market || 'JP');
+  onMarketChange();
+  document.getElementById('fTicker').value = draft.ticker || '';
+  document.getElementById('fName').value = draft.name || '';
+  document.getElementById('fSector').value = draft.sector || '';
+  document.getElementById('fQty').value = formatNumericText(draft.quantity || '');
+  document.getElementById('fAvg').value = formatNumericText(draft.avgPrice || '');
+  document.getElementById('fNote').value = draft.note || '';
+  saveStockFormDraftNow();
+  toast('入力途中の銘柄情報を復元しました', 'success');
 }
 
 function getYahooTicker(ticker, market) {
@@ -2120,6 +2196,7 @@ function updateCountdownLabel() {
 // ダウンロードを待たずに即実行する。これで初回描画がライブラリ読み込みで
 // ブロックされず、起動直後にすぐ画面が出る。
 render();
+setTimeout(restoreStockFormDraftModal, 0);
 checkAPI();
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
@@ -3061,6 +3138,11 @@ document.querySelectorAll('.overlay').forEach((overlay, index) => {
   }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
 });
 
+const stockFormGrid = document.querySelector('#overlay .form-grid');
+stockFormGrid.addEventListener('input', scheduleStockFormDraft);
+stockFormGrid.addEventListener('change', scheduleStockFormDraft);
+window.addEventListener('pagehide', saveStockFormDraftNow);
+
 document.addEventListener('keydown', e => {
   if (e.key !== 'Tab') return;
   const overlay = [...document.querySelectorAll('.overlay.open')].at(-1);
@@ -3074,7 +3156,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ── モーダル ──────────────────────────────────────────────────────
-function openModal(id = null) {
+function openModal(id = null, preserveDraft = false) {
+  if (!preserveDraft) clearStockFormDraft();
   editId = id;
   wakeRender(); // モーダルを開いたタイミングで Render を起動開始
   const s = id ? stocks.find(x => x.id === id) : null;
@@ -3093,21 +3176,34 @@ function openModal(id = null) {
     document.getElementById('fAvgCur').value = s?.avgCurrency || 'JPY';
   }
   onMarketChange();
+  stockFormBaseline = stockFormSignature();
   document.getElementById('overlay').classList.add('open');
   document.getElementById('fTicker').focus();
 }
-function closeModal(e) {
+function closeModal(e, discardDraft = false) {
   if (e && e.target !== document.getElementById('overlay')) return;
+  if (!discardDraft && stockFormHasChanges()) {
+    saveStockFormDraftNow();
+    toast('入力中のため閉じません。閉じる場合は「キャンセル」を押してください', 'error');
+    return;
+  }
+  clearStockFormDraft();
   document.getElementById('overlay').classList.remove('open');
+  stockFormBaseline = null;
   editId = null;
 }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const openOverlays = [...document.querySelectorAll('.overlay.open')];
-    openOverlays.at(-1)?.classList.remove('open');
+    const topOverlay = openOverlays.at(-1);
     closeToolbarMore();
-    editId = null;
-    watchlistEditId = null;
+    if (!topOverlay) return;
+    if (topOverlay.id === 'overlay') {
+      closeModal(null, false);
+    } else {
+      topOverlay.classList.remove('open');
+      if (topOverlay.id === 'watchlistOverlay') watchlistEditId = null;
+    }
   }
 });
 function onMarketChange() {
@@ -3153,7 +3249,10 @@ async function autoFetchName(ticker, market) {
   hint.style.display = '';
   try {
     const name = await fetchSecurityName(ticker, market);
-    if (name && !nameEl.value) nameEl.value = name;
+    if (name && !nameEl.value) {
+      nameEl.value = name;
+      saveStockFormDraftNow();
+    }
   } catch(e) {
   } finally {
     hint.style.display = 'none';
@@ -3234,8 +3333,7 @@ function saveStock() {
   }
 
   save(); render(); renderPieChart();
-  document.getElementById('overlay').classList.remove('open');
-  editId = null;
+  closeModal(null, true);
   setTimeout(localizeJapaneseNames, 0);
   // 新規追加時は自動で価格取得
   if (isNew) setTimeout(fetchAllPrices, 200);
