@@ -693,7 +693,7 @@
         <input type="text" id="fNote" placeholder="自由記述">
       </div>
     </div>
-    <p class="form-hint" style="margin-top:12px">入力途中の内容はこのブラウザー内に自動で一時保存されます（24時間）。</p>
+    <p class="form-hint" style="margin-top:12px">登録画面は「保存」または「キャンセル」で閉じます。入力途中の内容はブラウザー内に24時間保存されます。</p>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModal(null, true)">キャンセル</button>
       <button class="btn-primary" onclick="saveStock()">保存</button>
@@ -3185,9 +3185,9 @@ function openModal(id = null, preserveDraft = false) {
 }
 function closeModal(e, discardDraft = false) {
   if (e && e.target !== document.getElementById('overlay')) return;
-  if (!discardDraft && stockFormHasChanges()) {
-    saveStockFormDraftNow();
-    toast('入力中のため閉じません。閉じる場合は「キャンセル」を押してください', 'error');
+  if (!discardDraft) {
+    if (stockFormHasChanges()) saveStockFormDraftNow();
+    toast('登録画面は「保存」または「キャンセル」で閉じてください', 'error');
     return;
   }
   clearStockFormDraft();
