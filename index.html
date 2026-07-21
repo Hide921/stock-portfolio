@@ -3443,6 +3443,17 @@ function closeModal(e, discardDraft = false) {
   stockFormBaseline = null;
   editId = null;
 }
+const PROTECTED_MODAL_IDS = new Set([
+  'overlay', 'watchlistOverlay', 'importOverlay', 'rebalanceOverlay',
+  'collateralOverlay', 'sellOverlay', 'txOverlay', 'sbiImportOverlay',
+]);
+function blockAccidentalModalClose(e, overlayId) {
+  if (!e) return false;
+  if (e.target === document.getElementById(overlayId)) {
+    toast('入力・編集画面は画面内のボタンから閉じてください', 'error');
+  }
+  return true;
+}
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const openOverlays = [...document.querySelectorAll('.overlay.open')];
@@ -3451,9 +3462,10 @@ document.addEventListener('keydown', e => {
     if (!topOverlay) return;
     if (topOverlay.id === 'overlay') {
       closeModal(null, false);
+    } else if (PROTECTED_MODAL_IDS.has(topOverlay.id)) {
+      toast('入力・編集画面は画面内のボタンから閉じてください', 'error');
     } else {
       topOverlay.classList.remove('open');
-      if (topOverlay.id === 'watchlistOverlay') watchlistEditId = null;
     }
   }
 });
@@ -3749,7 +3761,7 @@ function openWatchlistModal(id = null) {
 }
 
 function closeWatchlistModal(e) {
-  if (e && e.target !== document.getElementById('watchlistOverlay')) return;
+  if (blockAccidentalModalClose(e, 'watchlistOverlay')) return;
   document.getElementById('watchlistOverlay').classList.remove('open');
   watchlistEditId = null;
 }
@@ -3876,7 +3888,7 @@ function openSellModal(id) {
   document.getElementById('sellOverlay').classList.add('open');
 }
 function closeSellModal(e) {
-  if (e && e.target !== document.getElementById('sellOverlay')) return;
+  if (blockAccidentalModalClose(e, 'sellOverlay')) return;
   document.getElementById('sellOverlay').classList.remove('open');
   sellStockId = null;
 }
@@ -3962,7 +3974,7 @@ function openTxModal() {
   document.getElementById('txOverlay').classList.add('open');
 }
 function closeTxModal(e) {
-  if (e && e.target !== document.getElementById('txOverlay')) return;
+  if (blockAccidentalModalClose(e, 'txOverlay')) return;
   document.getElementById('txOverlay').classList.remove('open');
 }
 function txAccLabel(a) { return a === 'nisa' ? 'NISA' : '特定'; }
@@ -4429,7 +4441,7 @@ function buildSbiPreview(parsed) {
   document.getElementById('sbiImportOverlay').classList.add('open');
 }
 function closeSbiImport(e) {
-  if (e && e.target !== document.getElementById('sbiImportOverlay')) return;
+  if (blockAccidentalModalClose(e, 'sbiImportOverlay')) return;
   document.getElementById('sbiImportOverlay').classList.remove('open');
   _sbiPending = [];
 }
@@ -4495,7 +4507,7 @@ function openImportModal() {
 }
 
 function closeImportModal(e) {
-  if (e && e.target !== document.getElementById('importOverlay')) return;
+  if (blockAccidentalModalClose(e, 'importOverlay')) return;
   document.getElementById('importOverlay').classList.remove('open');
 }
 
@@ -4806,7 +4818,7 @@ function openRebalanceModal() {
 }
 
 function closeRebalanceModal(e) {
-  if (e && e.target !== document.getElementById('rebalanceOverlay')) return;
+  if (blockAccidentalModalClose(e, 'rebalanceOverlay')) return;
   document.getElementById('rebalanceOverlay').classList.remove('open');
 }
 
@@ -5007,7 +5019,7 @@ function openCollateralModal(id = null) {
 }
 
 function closeCollateralModal(e) {
-  if (e && e.target !== document.getElementById('collateralOverlay')) return;
+  if (blockAccidentalModalClose(e, 'collateralOverlay')) return;
   document.getElementById('collateralOverlay').classList.remove('open');
   collateralEditId = null;
 }
