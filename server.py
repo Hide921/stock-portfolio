@@ -1812,9 +1812,15 @@ def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeo
 # Render は GitHub Actions の /api/health ping で起動状態を維持する。
 # ブラウザが閉じていても、このスレッドが Supabase 上の保有銘柄を読み、
 # 市場別 TTL に達した価格だけを更新して /api/prices のキャッシュを温める。
-BACKGROUND_PRICE_REFRESH = os.getenv('BACKGROUND_PRICE_REFRESH', '0').lower() in {'1', 'true', 'yes', 'on'}
+BACKGROUND_PRICE_REFRESH = os.getenv('BACKGROUND_PRICE_REFRESH', '1').lower() in {'1', 'true', 'yes', 'on'}
 BACKGROUND_REFRESH_INTERVAL_SEC = max(30, int(os.getenv('BACKGROUND_REFRESH_INTERVAL_SEC', '60')))
 TRACKED_TICKERS_TTL_SEC = max(60, int(os.getenv('TRACKED_TICKERS_TTL_SEC', '300')))
+DEFAULT_SUPABASE_URL = 'https://ugyashjjxoezvlnjtizw.supabase.co'
+DEFAULT_SUPABASE_ANON_KEY = (
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.'
+    'eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.'
+    'B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4'
+)
 
 _background_refresh_lock = threading.Lock()
 _background_refresh_started = False
@@ -1854,8 +1860,8 @@ def _load_tracked_tickers() -> list[str]:
         return list(cached['tickers'])
 
     tickers = []
-    supabase_url = os.getenv('SUPABASE_URL', '').strip().rstrip('/')
-    supabase_key = os.getenv('SUPABASE_ANON_KEY', '').strip()
+    supabase_url = os.getenv('SUPABASE_URL', DEFAULT_SUPABASE_URL).strip().rstrip('/')
+    supabase_key = os.getenv('SUPABASE_ANON_KEY', DEFAULT_SUPABASE_ANON_KEY).strip()
     if supabase_url and supabase_key:
         try:
             response = req.get(
