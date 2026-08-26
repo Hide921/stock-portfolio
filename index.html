@@ -2182,9 +2182,9 @@ document.addEventListener('visibilitychange', () => {
     _renderWakeTs = 0;
     wakeRender();
   }
-  // 非表示中は価格更新を止めているため、復帰時に古ければ即更新してカウントダウンを立て直す
+  // ブラウザやOSによるバックグラウンドタイマーの休止に備え、復帰時に古ければ即更新する。
   if (Date.now() - lastPriceFetchTs > refreshIntervalSec() * 1000) {
-    autoRefreshCountdown = refreshIntervalSec();
+    resetAutoRefreshSchedule();
     fetchAllPrices();
   } else {
     updateCountdownLabel();
@@ -2284,12 +2284,20 @@ function anyHeldMarketActive() {
   return (hasJp && isJpMarketOpen()) || (hasUs && isUsMarketOpen());
 }
 
-// 価格自動更新: 取引時間中は 60 秒、全市場閉場中は 10 分。タブ非表示中は停止（電池・通信を節約）。
+// 価格自動更新: 取引時間中は 60 秒、全市場閉場中は 10 分。
+// タブ非表示中も継続する。ブラウザがタイマーを間引いても実時刻で期限を判定するため、
+// カウントダウンが遅延せず、次に実行機会が来た時点で更新できる。
 const AUTO_REFRESH_ACTIVE = 60;   // 秒
 const AUTO_REFRESH_IDLE   = 600;  // 秒
 function refreshIntervalSec() { return anyHeldMarketActive() ? AUTO_REFRESH_ACTIVE : AUTO_REFRESH_IDLE; }
-let autoRefreshCountdown = refreshIntervalSec();
 let lastPriceFetchTs = Date.now();
+let nextPriceFetchTs = lastPriceFetchTs + refreshIntervalSec() * 1000;
+let autoRefreshCountdown = refreshIntervalSec();
+
+function resetAutoRefreshSchedule() {
+  autoRefreshCountdown = refreshIntervalSec();
+  nextPriceFetchTs = Date.now() + autoRefreshCountdown * 1000;
+}
 
 function fmtCountdown(sec) {
   if (sec >= 60) { const m = Math.floor(sec / 60), s = sec % 60; return s ? `${m}分${s}秒後` : `${m}分後`; }
@@ -2300,7 +2308,7 @@ function updateCountdownLabel() {
   if (!el) return;
   const base = (el.dataset.base || el.textContent).replace(/ \(次回更新: .+?\)$/, '');
   el.dataset.base = base;
-  el.textContent = document.hidden ? base : base + ` (次回更新: ${fmtCountdown(autoRefreshCountdown)})`;
+  el.textContent = base + ` (次回更新: ${fmtCountdown(autoRefreshCountdown)})`;
 }
 
 // ── Phase A: ライブラリ非依存の初回描画（即時実行）─────────────────
@@ -2313,12 +2321,14 @@ checkAPI();
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
 
-// 1 秒ごとのカウントダウン。タブ非表示中はカウントを進めず価格更新もしない。
+// 1 秒ごとに実時刻から残り時間を再計算。バックグラウンドでタイマーが間引かれても追従する。
 setInterval(() => {
-  if (document.hidden) { updateCountdownLabel(); return; }
-  autoRefreshCountdown--;
-  if (autoRefreshCountdown <= 0) {
-    autoRefreshCountdown = refreshIntervalSec();
+  const now = Date.now();
+  // 閉場中に設定した10分待ちの途中で市場が開いた場合は、60秒周期へ前倒しする。
+  nextPriceFetchTs = Math.min(nextPriceFetchTs, lastPriceFetchTs + refreshIntervalSec() * 1000);
+  autoRefreshCountdown = Math.max(0, Math.ceil((nextPriceFetchTs - now) / 1000));
+  if (now >= nextPriceFetchTs) {
+    resetAutoRefreshSchedule();
     fetchAllPrices();
   }
   updateCountdownLabel();
@@ -2723,8 +2733,8 @@ async function fetchAllPrices() {
     isFetching = false;
     btn.innerHTML = '📡 価格を自動取得';
     btn.disabled  = false;
-    autoRefreshCountdown = refreshIntervalSec(); // カウントダウンリセット（閉場中は長め）
     lastPriceFetchTs = Date.now();
+    resetAutoRefreshSchedule(); // カウントダウンリセット（閉場中は長め）
   }
 }
 

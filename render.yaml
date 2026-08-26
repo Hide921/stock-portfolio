@@ -8,3 +8,13 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: BACKGROUND_PRICE_REFRESH
+        value: "1"
+      - key: BACKGROUND_REFRESH_INTERVAL_SEC
+        value: "60"
+      - key: TRACKED_TICKERS_TTL_SEC
+        value: "300"
+      - key: SUPABASE_URL
+        value: https://ugyashjjxoezvlnjtizw.supabase.co
+      - key: SUPABASE_ANON_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4

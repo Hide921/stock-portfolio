@@ -1504,7 +1504,11 @@ def favicon():
 # ── API ───────────────────────────────────────────────────────────
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'ok'})
+    with _background_refresh_lock:
+        background = dict(_background_refresh_status)
+    background['enabled'] = BACKGROUND_PRICE_REFRESH
+    background['started'] = _background_refresh_started
+    return jsonify({'status': 'ok', 'background_price_refresh': background})
 
 
 @app.route('/api/data', methods=['GET', 'POST'])
@@ -1753,12 +1757,8 @@ def _classify_ticker(ticker: str) -> str:
     return 'us'
 
 
-def _fetch_one_price(ticker: str) -> dict:
-    """キャッシュ確認 → 実取得。例外はそのまま伝播（呼び出し側でハンドル）。"""
-    cached = _cached_price(ticker)
-    if cached:
-        logging.info(f'CACHE {ticker}')
-        return cached
+def _fetch_one_price_fresh(ticker: str) -> dict:
+    """キャッシュを参照せず、上流から最新価格を取得して保存する。"""
     if is_fund_ticker(ticker):
         fund_code = ticker[:-2]
         data = get_fund_price_yfjp(fund_code)
@@ -1769,15 +1769,26 @@ def _fetch_one_price(ticker: str) -> dict:
     return data
 
 
-def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeout: int):
+def _fetch_one_price(ticker: str) -> dict:
+    """キャッシュ確認 → 実取得。例外はそのまま伝播（呼び出し側でハンドル）。"""
+    cached = _cached_price(ticker)
+    if cached:
+        logging.info(f'CACHE {ticker}')
+        return cached
+    return _fetch_one_price_fresh(ticker)
+
+
+def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeout: int,
+              fetcher=None):
     """指定ティッカーを ThreadPool で並列取得。(成功dict, 失敗dict) を返す。"""
     ok: dict = {}
     err: dict = {}
     if not tickers:
         return ok, err
     workers = max(1, min(len(tickers), max_workers))
+    fetch_fn = fetcher or _fetch_one_price
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_fetch_one_price, t): t for t in tickers}
+        futures = {ex.submit(fetch_fn, t): t for t in tickers}
         try:
             for fut in concurrent.futures.as_completed(futures, timeout=pool_timeout):
                 t = futures[fut]
@@ -1795,6 +1806,223 @@ def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeo
             if t not in ok and t not in err:
                 err[t] = 'timeout'
     return ok, err
+
+
+# ── サーバー常駐の価格更新 ───────────────────────────────────────
+# Render は GitHub Actions の /api/health ping で起動状態を維持する。
+# ブラウザが閉じていても、このスレッドが Supabase 上の保有銘柄を読み、
+# 市場別 TTL に達した価格だけを更新して /api/prices のキャッシュを温める。
+BACKGROUND_PRICE_REFRESH = os.getenv('BACKGROUND_PRICE_REFRESH', '0').lower() in {'1', 'true', 'yes', 'on'}
+BACKGROUND_REFRESH_INTERVAL_SEC = max(30, int(os.getenv('BACKGROUND_REFRESH_INTERVAL_SEC', '60')))
+TRACKED_TICKERS_TTL_SEC = max(60, int(os.getenv('TRACKED_TICKERS_TTL_SEC', '300')))
+
+_background_refresh_lock = threading.Lock()
+_background_refresh_started = False
+_background_refresh_status = {
+    'running': False,
+    'last_started_at': None,
+    'last_completed_at': None,
+    'tracked_count': 0,
+    'due_count': 0,
+    'updated_count': 0,
+    'failed_count': 0,
+    'last_error': None,
+}
+_tracked_tickers_cache = {'tickers': [], 'ts': 0.0}
+
+
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+def _tickers_from_items(items) -> list[str]:
+    tickers = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get('yahooTicker') or '').strip().upper()
+        if ticker and _TICKER_RE.fullmatch(ticker):
+            tickers.append(ticker)
+    return tickers
+
+
+def _load_tracked_tickers() -> list[str]:
+    """Supabaseを優先し、旧Gistと環境変数をフォールバックに使う。"""
+    now = time.time()
+    cached = _tracked_tickers_cache
+    if cached['tickers'] and now - cached['ts'] < TRACKED_TICKERS_TTL_SEC:
+        return list(cached['tickers'])
+
+    tickers = []
+    supabase_url = os.getenv('SUPABASE_URL', '').strip().rstrip('/')
+    supabase_key = os.getenv('SUPABASE_ANON_KEY', '').strip()
+    if supabase_url and supabase_key:
+        try:
+            response = req.get(
+                f'{supabase_url}/rest/v1/user_data',
+                headers={
+                    'apikey': supabase_key,
+                    'Authorization': f'Bearer {supabase_key}',
+                    'Accept': 'application/json',
+                },
+                params={
+                    'select': 'key,value',
+                    'key': 'in.(sp_stocks,sp_watchlist)',
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            for row in rows if isinstance(rows, list) else []:
+                tickers.extend(_tickers_from_items(row.get('value')))
+        except Exception as exc:
+            logging.warning(f'BACKGROUND Supabase ticker load failed: {type(exc).__name__}')
+
+    # Supabase未設定・一時障害時は、既存のGist同期データを利用する。
+    if not tickers:
+        pat = os.getenv('GITHUB_PAT', '').strip()
+        gist_id = os.getenv('GIST_ID', '').strip()
+        if pat and gist_id:
+            try:
+                response = req.get(
+                    f'https://api.github.com/gists/{gist_id}',
+                    headers={
+                        'Authorization': f'token {pat}',
+                        'Accept': 'application/vnd.github+json',
+                        'X-GitHub-Api-Version': '2022-11-28',
+                    },
+                    timeout=15,
+                )
+                response.raise_for_status()
+                content = response.json()['files']['portfolio.json']['content']
+                payload = json.loads(content)
+                stocks_data = payload if isinstance(payload, list) else payload.get('stocks', [])
+                tickers.extend(_tickers_from_items(stocks_data))
+            except Exception as exc:
+                logging.warning(f'BACKGROUND Gist ticker load failed: {type(exc).__name__}')
+
+    # 手動の追加ティッカーも併用可能。保有データ取得失敗時の最終フォールバックにもなる。
+    for ticker in os.getenv('PRICE_REFRESH_TICKERS', '').split(','):
+        normalized = ticker.strip().upper()
+        if normalized and _TICKER_RE.fullmatch(normalized):
+            tickers.append(normalized)
+
+    if tickers:
+        tickers.append('USDJPY=X')
+    unique = list(dict.fromkeys(tickers))
+    _tracked_tickers_cache['tickers'] = unique
+    _tracked_tickers_cache['ts'] = now
+    return unique
+
+
+def _due_background_tickers(tickers: list[str]) -> list[str]:
+    now = time.time()
+    due = []
+    with _price_cache_lock:
+        for ticker in tickers:
+            entry = _price_cache.get(ticker)
+            if not entry or now - entry.get('ts', 0) >= _get_price_ttl(ticker):
+                due.append(ticker)
+    return due
+
+
+def _refresh_price_cache_now(tickers: list[str]) -> tuple[dict, dict]:
+    """期限到来銘柄をバッチ優先で更新し、成功・失敗を返す。"""
+    updated: dict = {}
+    failed: dict = {}
+    if not tickers:
+        return updated, failed
+
+    try:
+        batch_result = fetch_prices_batch(tickers)
+    except Exception as exc:
+        logging.warning(f'BACKGROUND batch fetch failed: {type(exc).__name__}')
+        batch_result = {}
+    for ticker, data in batch_result.items():
+        if ticker in tickers and isinstance(data, dict) and data.get('price'):
+            updated[ticker] = data
+            _store_price(ticker, data)
+
+    remaining = [ticker for ticker in tickers if ticker not in updated]
+    us_tickers = [ticker for ticker in remaining if _classify_ticker(ticker) == 'us']
+    jp_tickers = [ticker for ticker in remaining if _classify_ticker(ticker) == 'jp']
+    if us_tickers or jp_tickers:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as outer:
+            future_us = outer.submit(
+                _run_pool, us_tickers, 6, 75, 30, _fetch_one_price_fresh
+            )
+            future_jp = outer.submit(
+                _run_pool, jp_tickers, 5, 75, 30, _fetch_one_price_fresh
+            )
+            ok_us, err_us = future_us.result()
+            ok_jp, err_jp = future_jp.result()
+        updated.update(ok_us)
+        updated.update(ok_jp)
+        failed.update(err_us)
+        failed.update(err_jp)
+    return updated, failed
+
+
+def _background_price_refresh_loop():
+    # ページ起動直後の通常価格取得と競合しないよう、初回だけ少し待つ。
+    time.sleep(5)
+    while True:
+        try:
+            tickers = _load_tracked_tickers()
+            due = _due_background_tickers(tickers)
+            with _background_refresh_lock:
+                _background_refresh_status.update({
+                    'running': True,
+                    'last_started_at': _iso_utc_now(),
+                    'tracked_count': len(tickers),
+                    'due_count': len(due),
+                    'last_error': None if tickers else 'tracked tickers unavailable',
+                })
+            updated, failed = _refresh_price_cache_now(due)
+            with _background_refresh_lock:
+                _background_refresh_status.update({
+                    'running': False,
+                    'last_completed_at': _iso_utc_now(),
+                    'updated_count': len(updated),
+                    'failed_count': len(failed),
+                })
+            if due:
+                logging.info(
+                    f'BACKGROUND price refresh: tracked={len(tickers)} due={len(due)} '
+                    f'updated={len(updated)} failed={len(failed)}'
+                )
+        except Exception as exc:
+            logging.exception('BACKGROUND price refresh loop failed')
+            with _background_refresh_lock:
+                _background_refresh_status.update({
+                    'running': False,
+                    'last_completed_at': _iso_utc_now(),
+                    'last_error': type(exc).__name__,
+                })
+        time.sleep(BACKGROUND_REFRESH_INTERVAL_SEC)
+
+
+def _start_background_price_refresh():
+    global _background_refresh_started
+    if not BACKGROUND_PRICE_REFRESH:
+        return
+    with _background_refresh_lock:
+        if _background_refresh_started:
+            return
+        _background_refresh_started = True
+    threading.Thread(
+        target=_background_price_refresh_loop,
+        name='price-background-refresh',
+        daemon=True,
+    ).start()
+    logging.info('BACKGROUND price refresh started')
+
+
+@app.before_request
+def _ensure_background_price_refresh_started():
+    # gunicorn --preload でもfork後のワーカー内でスレッドを開始する。
+    _start_background_price_refresh()
+    return None
 
 
 @app.route('/api/prices')

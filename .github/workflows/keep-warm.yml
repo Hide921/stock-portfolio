@@ -6,10 +6,9 @@ name: keep-render-warm
 
 on:
   schedule:
-    # 10 分ごと（GitHub cron は UTC）。
-    # JST 07:00〜24:00 のみ稼働 = UTC 22:00〜14:59 → hours 0-14,22,23。
-    # 稼働時間を絞り Render Free の instance-hours を節約する。
-    - cron: '*/10 0-14,22,23 * * *'
+    # 10 分ごと・24時間稼働（GitHub cron は UTC）。
+    # 米国市場の取引時間中も Render と常駐価格更新を止めない。
+    - cron: '*/10 * * * *'
   workflow_dispatch: {}   # 手動実行も可能
 
 # 遅延で実行が重なっても 1 本に集約
