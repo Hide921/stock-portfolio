@@ -22,6 +22,31 @@ function context(extra = {}) {
 const response = data => ({ ok: true, json: async () => data });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('古いサーバー保存値は表示しつつ代替取得で更新する', async () => {
+  const events = [];
+  const ctx = context({
+    fetch: async url => {
+      assert.ok(url.includes('mode=cached'));
+      return response({ A: { price: 10, stale: true } });
+    },
+    getCurrentPriceViaCors: async () => ({ price: 12 }),
+  });
+  const result = await ctx.collectPrices(['A'], batch => events.push(batch.A.price));
+  assert.deepEqual(events, [10, 12]);
+  assert.equal(result.prices.A.price, 12);
+});
+
+test('進捗表示は更新済み・保存値・未取得を区別する', () => {
+  const nodes = {};
+  const ctx = context({ document: { getElementById: id => nodes[id] ||= {} } });
+  vm.runInContext(source('updatePriceProgress'), ctx);
+  ctx.updatePriceProgress(['A','B','C'], { A:{price:10}, B:{price:9,stale:true} }, true, true);
+  assert.equal(nodes.priceProgressCount.textContent, '1 / 3 銘柄更新');
+  assert.match(nodes.priceProgressDetail.textContent, /更新済み 1 ・ 保存値 1 ・ 未取得 1/);
+  assert.match(nodes.priceProgressDetail.textContent, /30秒後/);
+  assert.equal(nodes.priceProgressBar.value, 1);
+});
+
 test('バックエンドの成功分を代替取得の完了前に通知する', async () => {
   let finish;
   const events = [];
@@ -97,7 +122,7 @@ test('30秒後の再試行は未取得分だけに限定し、再試行を繰り
     console, document: { getElementById: () => ({ style: {} }) },
     localStorage: { setItem() {} },
     setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; },
-    clearTimeout() {}, showPartialPrices() {},
+    clearTimeout() {}, showPartialPrices() {}, updatePriceProgress() {}, renderPriceIssues() {},
     loadPriceCache: () => ({ prices: { OLD: { price: 7 } }, ts: Date.now() }),
     savePriceCache: prices => cacheWrites.push(prices), cacheAgeText: () => '',
     recordDailyLog: () => false, savePriceState() {}, render() {}, renderWatchlist() {},

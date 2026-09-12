@@ -1341,6 +1341,7 @@ STALE_GRACE_MULTIPLIER = 2  # 総キャッシュ寿命 = TTL × 2
 # 多重バックグラウンド取得を抑止
 _refresh_in_flight: set = set()
 _refresh_lock = threading.Lock()
+_refresh_slots = threading.BoundedSemaphore(6)
 
 
 def _persist_price_cache():
@@ -1412,6 +1413,8 @@ def _trigger_background_refresh(ticker: str):
     with _refresh_lock:
         if ticker in _refresh_in_flight:
             return
+        if not _refresh_slots.acquire(blocking=False):
+            return
         _refresh_in_flight.add(ticker)
     def worker():
         try:
@@ -1427,7 +1430,14 @@ def _trigger_background_refresh(ticker: str):
         finally:
             with _refresh_lock:
                 _refresh_in_flight.discard(ticker)
-    threading.Thread(target=worker, daemon=True).start()
+            _refresh_slots.release()
+    try:
+        threading.Thread(target=worker, daemon=True).start()
+    except Exception:
+        with _refresh_lock:
+            _refresh_in_flight.discard(ticker)
+        _refresh_slots.release()
+        raise
 
 def _cached_price(ticker: str):
     """SWR 対応キャッシュ取得。
@@ -2035,6 +2045,21 @@ def _ensure_background_price_refresh_started():
     return None
 
 
+def _get_prices_immediate(tickers):
+    result = {}
+    for ticker in tickers:
+        cached = _cached_price(ticker)
+        if cached:
+            result[ticker] = cached
+            continue
+        fallback = _last_known_price(ticker)
+        _trigger_background_refresh(ticker)
+        result[ticker] = fallback or {
+            'price': None, 'error': None, 'pending': True,
+        }
+    return result
+
+
 @app.route('/api/prices')
 def get_prices():
     """
@@ -2049,6 +2074,10 @@ def get_prices():
     tickers, parse_error = _parse_tickers(request.args.get('tickers', ''))
     if parse_error:
         return jsonify({'error': parse_error}), 400
+
+    # 画面用: 上流通信を待たずに返す。未取得・期限切れだけ裏で更新する。
+    if request.args.get('mode') == 'cached':
+        return jsonify(_get_prices_immediate(tickers))
 
     # ── Step 0: キャッシュ優先 ──
     result: dict = {}

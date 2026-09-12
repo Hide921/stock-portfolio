@@ -214,6 +214,14 @@
     .table-wrap.compact th:nth-child(6), .table-wrap.compact td:nth-child(6) { display: none; }
 
     /* ── 価格取得エラー ── */
+    .price-progress { margin: 0 0 13px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    .price-progress-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; font-size: 12px; }
+    #priceProgressCount { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .price-progress progress { width: 100%; height: 6px; margin-top: 9px; accent-color: var(--accent); appearance: none; border: 0; border-radius: 4px; overflow: hidden; background: var(--border); }
+    .price-progress progress::-webkit-progress-bar { background: var(--border); }
+    .price-progress progress::-webkit-progress-value { background: var(--accent); }
+    .price-progress progress::-moz-progress-bar { background: var(--accent); }
+    .price-progress p { margin: 7px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
     .price-issues { margin-bottom: 13px; border: 1px solid rgba(245,158,11,0.38); background: rgba(245,158,11,0.06); border-radius: 12px; overflow: hidden; }
     .price-issues[hidden] { display: none; }
     .price-issues-header { display: flex; align-items: center; gap: 9px; padding: 10px 13px; }
@@ -685,9 +693,15 @@
     <button class="density-toggle" id="densityToggle" onclick="toggleCompactView()" aria-pressed="false">一覧をコンパクトに</button>
   </div>
 
+  <section class="price-progress" aria-label="価格の更新状況">
+    <div class="price-progress-top"><strong id="priceProgressTitle" role="status" aria-live="polite">価格を確認しています</strong><span id="priceProgressCount"></span></div>
+    <progress id="priceProgressBar" max="1" value="0" aria-label="取得済みの銘柄数"></progress>
+    <p id="priceProgressDetail">保存済みの価格を表示しながら更新します。</p>
+  </section>
+
   <section class="price-issues" id="priceIssuesSection" aria-labelledby="priceIssuesTitle" hidden>
     <div class="price-issues-header">
-      <h2 class="price-issues-title" id="priceIssuesTitle">⚠ 価格取得エラー</h2>
+      <h2 class="price-issues-title" id="priceIssuesTitle">価格の更新を確認</h2>
       <span class="price-issues-count" id="priceIssuesCount">0件</span>
       <button class="btn-ghost" id="retryAllPricesBtn" onclick="retryAllPriceIssues()">すべて再取得</button>
     </div>
@@ -2577,7 +2591,7 @@ async function mapWithConcurrency(items, limit, worker) {
 }
 
 function normalizeBackendPrice(ticker, data) {
-  if (!data?.price) return null;
+  if (!Number.isFinite(data?.price) || data.price <= 0) return null;
   const fund = isFundTicker(ticker);
   return {
     ticker,
@@ -2635,7 +2649,7 @@ async function collectPrices(tickers, onPrices, totalMs = 20000, backendMs = 800
           for (let i = 0; i < tickers.length; i += 16) batches.push(tickers.slice(i, i + 16));
           await mapWithConcurrency(batches, 2, async batch => {
             signal.throwIfAborted();
-            const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(batch.join(','))}`, {
+            const res = await fetch(`${API_BASE}/api/prices?mode=cached&tickers=${encodeURIComponent(batch.join(','))}`, {
               signal, cache: 'no-store',
             });
             if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
@@ -2651,7 +2665,7 @@ async function collectPrices(tickers, onPrices, totalMs = 20000, backendMs = 800
         }, controller.signal, backendMs);
       } catch(e) { /* 未取得分は残り時間内で代替取得する */ }
     }
-    const missing = tickers.filter(t => !prices[t]?.price);
+    const missing = tickers.filter(t => !prices[t]?.price || prices[t]?.stale);
     await mapWithConcurrency(missing, 4, async ticker => {
       if (controller.signal.aborted) return;
       try {
@@ -2686,6 +2700,22 @@ function showPartialPrices(prices) {
   renderWatchlist(true);
 }
 
+function updatePriceProgress(tickers, prices, finished = false, retry = false) {
+  const title = document.getElementById('priceProgressTitle');
+  if (!title) return;
+  const ready = tickers.filter(t => prices[t]?.price && !prices[t]?.stale).length;
+  const saved = tickers.filter(t => prices[t]?.price && prices[t]?.stale).length;
+  const pending = tickers.length - ready - saved;
+  title.textContent = finished ? (ready === tickers.length ? '価格の更新が完了しました' : ready > 0 ? '取得できた価格を反映しました' : saved > 0 ? '前回の価格を表示しています' : '価格を取得できませんでした') : '価格を更新しています';
+  document.getElementById('priceProgressCount').textContent = `${ready} / ${tickers.length} 銘柄更新`;
+  const bar = document.getElementById('priceProgressBar');
+  bar.max = Math.max(1, tickers.length);
+  bar.value = ready;
+  document.getElementById('priceProgressDetail').textContent =
+    `更新済み ${ready} ・ 保存値 ${saved} ・ ${finished ? '未取得' : '取得中'} ${pending}（為替を含む）。` +
+    (finished ? (ready === tickers.length ? '表示価格を更新しました。' : retry ? '保存値・未取得の銘柄は30秒後に再試行します。' : '保存値は最新価格ではありません。必要な銘柄を下の一覧から再取得できます。') : '取得済みから表示します。操作はそのまま続けられます。');
+}
+
 async function fetchAllPrices(options = {}) {
   if (isFetching) return; // 実行中の連打で全件取得を繰り返さない
   clearTimeout(priceRetryTimer);
@@ -2698,9 +2728,13 @@ async function fetchAllPrices(options = {}) {
     const heldTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
     const allTickers = options.tickers ? heldTickers.filter(t => options.tickers.includes(t)) : heldTickers;
     const requested = new Set(allTickers);
+    const progressPrices = {};
+    updatePriceProgress(allTickers, progressPrices);
     const oldPrices = new Map(stocks.concat(watchlist).map(s => [s.id, s.currentPrice]));
     const { prices: priceMap, timedOut } = await collectPrices(allTickers, batch => {
       showPartialPrices(batch);
+      Object.assign(progressPrices, batch);
+      updatePriceProgress(allTickers, progressPrices);
       btn.innerHTML = '<span class="spin">⏳</span> 取得済みから表示中...';
     });
 
@@ -2742,7 +2776,8 @@ async function fetchAllPrices(options = {}) {
       }
       // API失敗 → キャッシュから価格を復元（古いデータであることを示す）
       const cached = cache?.prices?.[s.yahooTicker];
-      if (cached?.price) {
+      if (cached?.price && !(s.currentPrice > 0)) {
+        failed++;
         return {
           ...s,
           currentPrice: cached.price,
@@ -2755,7 +2790,7 @@ async function fetchAllPrices(options = {}) {
       // 既存価格を表示できても、今回の取得に失敗した銘柄はエラー一覧へ出す。
       failed++;
       const apiErr = d?.error ? String(d.error).slice(0, 80) : null;
-      const label = apiErr ? `失敗: ${apiErr}` : (s.currentPrice ? '更新なし' : '取得失敗');
+      const label = apiErr ? `失敗: ${apiErr}` : (s.currentPrice ? '更新待ち（前回値）' : '取得失敗');
       return { ...s, lastAttempted: now, fetchError: label };
     };
     stocks = stocks.map(s => applyPrice(s, true));
@@ -2779,7 +2814,6 @@ async function fetchAllPrices(options = {}) {
       // キャッシュ使用中 — エラー扱いしない
       dot.style.background = 'var(--yellow)';
       document.getElementById('apiLabel').textContent = `キャッシュ (${cacheAgeText(cache.ts)})`;
-      failed = 0;
     } else {
       apiOnline = false;
       dot.style.background = 'var(--red)';
@@ -2832,10 +2866,16 @@ async function fetchAllPrices(options = {}) {
       toastMsg = `${changed}件の価格を更新しました`;
       toastType = 'success';
     }
-    const missing = allTickers.filter(t => !priceMap[t]?.price);
+    const missing = allTickers.filter(t => !priceMap[t]?.price || priceMap[t]?.stale);
+    const displayPrices = { ...priceMap };
+    for (const item of stocks.concat(watchlist)) {
+      if (requested.has(item.yahooTicker) && !displayPrices[item.yahooTicker] && item.currentPrice > 0)
+        displayPrices[item.yahooTicker] = { price: item.currentPrice, stale: true };
+    }
+    updatePriceProgress(allTickers, displayPrices, true, missing.length > 0 && !options.retry);
     if (missing.length && !options.retry) {
       priceRetryTimer = setTimeout(() => fetchAllPrices({ tickers: missing, retry: true }), 30000);
-      toastMsg += `（未取得${missing.length}銘柄は30秒後に再試行）`;
+      toastMsg += `（保存値・未取得${missing.length}銘柄は30秒後に再試行）`;
     }
     if (timedOut) toastMsg = '待ち時間の上限に達しました。' + toastMsg;
     toast(toastMsg, toastType);
@@ -2846,6 +2886,7 @@ async function fetchAllPrices(options = {}) {
     isFetching = false;
     btn.innerHTML = '📡 価格を自動取得';
     btn.disabled  = false;
+    renderPriceIssues();
     lastPriceFetchTs = Date.now();
     resetAutoRefreshSchedule(); // カウントダウンリセット（閉場中は長め）
   }
@@ -3123,7 +3164,7 @@ function closePieModal(e) {
 
 // ── テーブル & サマリー ────────────────────────────────────────────
 function hasPriceIssue(item) {
-  return !!item?.fetchError && item.fetchError !== 'キャッシュ' && item.fetchError !== '古いキャッシュ';
+  return !!item?.fetchError;
 }
 
 function getPriceIssueItems() {
@@ -3141,7 +3182,7 @@ function renderPriceIssues() {
   section.hidden = issues.length === 0;
   document.getElementById('priceIssuesCount').textContent = `${issues.length}件`;
   const retryAllBtn = document.getElementById('retryAllPricesBtn');
-  retryAllBtn.disabled = issues.length === 0 || retryingPriceItems.size > 0;
+  retryAllBtn.disabled = isFetching || issues.length === 0 || retryingPriceItems.size > 0;
   retryAllBtn.textContent = retryingPriceItems.size > 0 ? '再取得中...' : 'すべて再取得';
   list.innerHTML = issues.map(({ item, kind, typeLabel }) => {
     const key = `${kind}:${item.id}`;
@@ -3165,12 +3206,14 @@ async function retryPriceItem(kind, id, quiet = false) {
   const item = collection.find(value => value.id === id);
   if (!item) return false;
   const key = `${kind}:${id}`;
-  if (retryingPriceItems.has(key)) return false;
+  if (isFetching || retryingPriceItems.has(key)) return false;
   retryingPriceItems.add(key);
   renderPriceIssues();
   const attemptedAt = new Date().toISOString();
   try {
-    const data = await getCurrentPrice(item.yahooTicker);
+    const result = await collectPrices([item.yahooTicker], () => {});
+    const data = result.prices[item.yahooTicker];
+    if (!(kind === 'watch' ? watchlist : stocks).includes(item)) return false;
     if (!(Number(data?.price) > 0)) throw new Error('価格データなし');
     const oldPrice = Number(item.currentPrice);
     item.currentPrice = Number(data.price);
@@ -3180,7 +3223,7 @@ async function retryPriceItem(kind, id, quiet = false) {
     item.navDate = data.nav_date ?? item.navDate ?? null;
     item.lastFetched = attemptedAt;
     item.lastAttempted = attemptedAt;
-    item.fetchError = null;
+    item.fetchError = data.stale ? '古いキャッシュ' : null;
     if (kind === 'stock' && Number.isFinite(oldPrice) && oldPrice !== item.currentPrice) {
       _flashMap[id] = item.currentPrice > oldPrice ? 'up' : 'down';
     }
@@ -3189,8 +3232,8 @@ async function retryPriceItem(kind, id, quiet = false) {
     renderWatchlist(true);
     renderPieChart();
     renderLineChart();
-    if (!quiet) toast(`${item.ticker} の価格を再取得しました`, 'success');
-    return true;
+    if (!quiet) toast(data.stale ? `${item.ticker} は保存値を表示しています` : `${item.ticker} の価格を再取得しました`, data.stale ? 'info' : 'success');
+    return !data.stale;
   } catch(e) {
     item.lastAttempted = attemptedAt;
     item.fetchError = `取得失敗: ${String(e?.message || e).slice(0, 60)}`;
@@ -3206,14 +3249,9 @@ async function retryPriceItem(kind, id, quiet = false) {
 }
 
 async function retryAllPriceIssues() {
-  const issues = getPriceIssueItems();
-  if (!issues.length || retryingPriceItems.size) return;
-  const results = await mapWithConcurrency(issues, 2, ({ item, kind }) => retryPriceItem(kind, item.id, true));
-  const successCount = results.filter(result => result.status === 'fulfilled' && result.value).length;
-  const failedCount = issues.length - successCount;
-  toast(failedCount
-    ? `${successCount}件成功、${failedCount}件は再取得できませんでした`
-    : `${successCount}件の価格を再取得しました`, failedCount ? 'error' : 'success');
+  const tickers = [...new Set(getPriceIssueItems().map(({ item }) => item.yahooTicker))];
+  if (!tickers.length || isFetching) return;
+  await fetchAllPrices({ tickers });
 }
 
 function stockRowHTML(s) {
