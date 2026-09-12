@@ -1787,7 +1787,8 @@ def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeo
         return ok, err
     workers = max(1, min(len(tickers), max_workers))
     fetch_fn = fetcher or _fetch_one_price
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {ex.submit(fetch_fn, t): t for t in tickers}
         try:
             for fut in concurrent.futures.as_completed(futures, timeout=pool_timeout):
@@ -1805,6 +1806,9 @@ def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeo
             fut.cancel()
             if t not in ok and t not in err:
                 err[t] = 'timeout'
+    finally:
+        # 実行中の通信は中断できないため、応答経路では完了を待たない。
+        ex.shutdown(wait=False, cancel_futures=True)
     return ok, err
 
 
@@ -2176,7 +2180,8 @@ def get_history():
         return ticker, data
 
     if need_fetch:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(need_fetch), 3)) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(need_fetch), 3))
+        try:
             futures = {ex.submit(fetch_hist_one, t): t for t in need_fetch}
             try:
                 for fut in concurrent.futures.as_completed(futures, timeout=60):
@@ -2195,6 +2200,8 @@ def get_history():
                     fut.cancel()
                 if t not in result:
                     result[t] = []
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
     return jsonify(result)
 

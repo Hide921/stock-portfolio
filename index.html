@@ -1471,6 +1471,29 @@ let collateralOpen    = false;
 
 let transactions      = [];  // 取引履歴（売買ログ）[{id,date,type,ticker,quantity,price,avgCost,fee,realizedPLJPY,...}, ...]
 const TRANSACTIONS_KEY = 'transactions_v1';
+const TX_DELETIONS_KEY = 'transaction_deletions_v1';
+let transactionDeletions = {};
+try { transactionDeletions = JSON.parse(localStorage.getItem(TX_DELETIONS_KEY) || '{}') || {}; } catch(e) {}
+
+// 削除と取り消しを別端末にも伝える。削除済みIDは履歴から消しても保持する。
+function mergeTransactionDeletions(local, cloud) {
+  const merged = { ...local };
+  for (const [id, state] of Object.entries(cloud || {})) {
+    if (!merged[id] || state.updatedAt > merged[id].updatedAt ||
+        (state.updatedAt === merged[id].updatedAt && state.deleted)) merged[id] = state;
+  }
+  return merged;
+}
+
+function recordTransactionDeletions(previous, current) {
+  const before = new Set(previous.map(t => t.id));
+  const after = new Set(current.map(t => t.id));
+  for (const id of new Set([...before, ...after])) {
+    if (before.has(id) === after.has(id)) continue;
+    const updatedAt = Math.max(Date.now(), (transactionDeletions[id]?.updatedAt || 0) + 1);
+    transactionDeletions[id] = { deleted: !after.has(id), updatedAt };
+  }
+}
 
 let watchlist          = []; // 買いたい候補 [{id,ticker,name,market,purchaseAmountJPY,note,...}]
 const WATCHLIST_KEY    = 'watchlist_v1';
@@ -1837,24 +1860,20 @@ function defaultStocks() {
 let _sb = null;
 const _SB_URL = 'https://ugyashjjxoezvlnjtizw.supabase.co';
 const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4';
-const SYNC_KEYS = ['sp_stocks','sp_portfolio_log','sp_collateral','sp_transactions','sp_watchlist','sp_watchlist_budget'];
+const SYNC_KEYS = ['sp_stocks','sp_portfolio_log','sp_collateral','sp_transactions','sp_watchlist','sp_watchlist_budget','sp_transaction_deletions'];
 
 async function _sbGet(key) {
-  const { data } = await _sb.from('user_data').select('value,updated_at').eq('key', key).maybeSingle();
+  const { data, error } = await _sb.from('user_data').select('value,updated_at').eq('key', key).maybeSingle();
+  if (error) throw error;
   return data ?? null;
 }
 
 async function _sbGetUpdatedAt(key) {
-  const { data } = await _sb.from('user_data').select('updated_at').eq('key', key).maybeSingle();
+  const { data, error } = await _sb.from('user_data').select('updated_at').eq('key', key).maybeSingle();
+  if (error) throw error;
   return data?.updated_at ?? null;
 }
 
-async function _sbSet(key, value) {
-  const { data } = await _sb.from('user_data')
-    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-    .select('updated_at').single();
-  return data?.updated_at ?? null;
-}
 
 let syncTimer = null;
 let isSyncing = false;
@@ -1879,7 +1898,8 @@ function _canonicalStocks() {
 }
 
 async function _sbGetLatestUpdatedAt() {
-  const { data } = await _sb.from('user_data').select('updated_at').in('key', SYNC_KEYS);
+  const { data, error } = await _sb.from('user_data').select('updated_at').in('key', SYNC_KEYS);
+  if (error) throw error;
   return (data || []).map(row => row.updated_at).filter(Boolean).sort().at(-1) || null;
 }
 
@@ -1893,6 +1913,7 @@ function _syncPayloads() {
     sp_portfolio_log: JSON.stringify(portfolioLog),
     sp_collateral:    JSON.stringify(collateralEntries),
     sp_transactions:  JSON.stringify(transactions),
+    sp_transaction_deletions: JSON.stringify(transactionDeletions),
     sp_watchlist:     _canonicalWatchlist(),
     sp_watchlist_budget: JSON.stringify(watchlistBudgetJPY),
   };
@@ -1904,22 +1925,37 @@ function _hasUnsyncedChanges() {
 }
 
 async function _doSave(force = false) {
+  // ポーリング前に保存しても、別端末の削除履歴を古い状態で上書きしない。
+  // 読込に失敗した場合は保存も中止し、未同期のローカル編集を残す。
+  const [txRow, deletionsRow] = await Promise.all([
+    _sbGet('sp_transactions'), _sbGet('sp_transaction_deletions'),
+  ]);
+  transactionDeletions = mergeTransactionDeletions(transactionDeletions, deletionsRow?.value);
+  transactions = mergeTransactions(transactions, txRow?.value, transactionDeletions);
+  localStorage.setItem(TX_DELETIONS_KEY, JSON.stringify(transactionDeletions));
+  localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+  render();
   const values = {
     sp_stocks:        stocks,
     sp_portfolio_log: portfolioLog,
     sp_collateral:    collateralEntries,
     sp_transactions:  transactions,
+    sp_transaction_deletions: transactionDeletions,
     sp_watchlist:     watchlist,
     sp_watchlist_budget: watchlistBudgetJPY,
   };
   const payloads = _syncPayloads();
   const dirty = Object.keys(values).filter(k => force || payloads[k] !== _lastSynced[k]);
   if (!dirty.length) return;
-  const tsList = await Promise.all(dirty.map(k => _sbSet(k, values[k])));
+  // 関連行を1リクエストで保存し、売却と保有数量などの部分保存を防ぐ。
+  const updatedAt = new Date().toISOString();
+  const rows = JSON.parse(JSON.stringify(dirty.map(key => ({ key, value: values[key], updated_at: updatedAt }))));
+  const { error } = await _sb.from('user_data').upsert(rows, { onConflict: 'key' });
+  if (error) throw error;
   dirty.forEach(k => { _lastSynced[k] = payloads[k]; });
-  // いずれかの同期対象を書いたら、サーバー時刻の最新値を端末側にも記録する。
-  if (dirty.length) {
-    const savedAt = tsList.filter(Boolean).sort().at(-1) || new Date().toISOString();
+  // 通信中に編集された場合は、その編集日時を保存完了時に巻き戻さない。
+  if (!_hasUnsyncedChanges()) {
+    const savedAt = updatedAt;
     lastCloudUpdatedAt = savedAt;
     localStorage.setItem(LOCAL_UPDATED_AT_KEY, savedAt);
   }
@@ -1941,6 +1977,11 @@ async function sbSave(silent = false) {
     console.error('sbSave error:', e);
   } finally {
     isSyncing = false;
+    // 通信中に行われた編集も再送する。失敗時は間隔を空けて再試行する。
+    if (_hasUnsyncedChanges()) {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => sbSave(true), 5000);
+    }
   }
 }
 
@@ -1959,16 +2000,18 @@ async function _fetchFromGist(pat, gistId) {
 
 async function sbLoad(silent = false) {
   if (isSyncing) return;
+  let loaded = false;
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow] = await Promise.all([
+    const [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow, deletionsRow] = await Promise.all([
       _sbGet('sp_stocks'),
       _sbGet('sp_portfolio_log'),
       _sbGet('sp_collateral'),
       _sbGet('sp_transactions'),
       _sbGet('sp_watchlist'),
       _sbGet('sp_watchlist_budget'),
+      _sbGet('sp_transaction_deletions'),
     ]);
     const cloudStocks     = stocksRow?.value      ?? null;
     const cloudLog        = logRow?.value          ?? null;
@@ -1976,7 +2019,7 @@ async function sbLoad(silent = false) {
     const cloudTransactions = txRow?.value         ?? null;
     const cloudWatchlist    = watchRow?.value       ?? null;
     const cloudWatchlistBudget = Number(watchBudgetRow?.value);
-    const cloudUpdatedAt  = [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow]
+    const cloudUpdatedAt  = [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow, deletionsRow]
       .map(row => row?.updated_at).filter(Boolean).sort().at(-1) || null;
     const localStocks     = JSON.parse(localStorage.getItem('stocks') || '[]');
     const localLog        = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
@@ -1985,8 +2028,11 @@ async function sbLoad(silent = false) {
     // マージで増えた分は次の保存でクラウドへ反映する（ポートフォリオ推移と同じ方式）。
     let localTransactions = [];
     try { localTransactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) {}
+    transactionDeletions = mergeTransactionDeletions(transactionDeletions, deletionsRow?.value);
+    localStorage.setItem(TX_DELETIONS_KEY, JSON.stringify(transactionDeletions));
+    _lastSynced.sp_transaction_deletions = JSON.stringify(deletionsRow?.value || {});
     if (Array.isArray(cloudTransactions) || localTransactions.length) {
-      transactions = mergeTransactions(localTransactions, cloudTransactions);
+      transactions = mergeTransactions(localTransactions, cloudTransactions, transactionDeletions);
       localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
       _lastSynced.sp_transactions = JSON.stringify(Array.isArray(cloudTransactions) ? cloudTransactions : []);
     }
@@ -2015,7 +2061,7 @@ async function sbLoad(silent = false) {
       ? cloudUpdatedAt > localUpdatedAt
       : !!cloudStocks; // タイムスタンプがない場合のみクラウド優先
 
-    // データの優先順: Gist移行データ > クラウド(新しい/件数多) > ローカル
+    // データの優先順: Gist移行データ > クラウド(新しい) > ローカル
     if (gistData && gistData.stocks.length > (cloudStocks?.length || 0)) {
       stocks       = gistData.stocks.map(migrateStock);
       portfolioLog = mergePortfolioLogs(localLog, normalizePortfolioLog(gistData.log));
@@ -2030,46 +2076,40 @@ async function sbLoad(silent = false) {
       localStorage.setItem(LOCAL_UPDATED_AT_KEY, lastCloudUpdatedAt || new Date().toISOString());
       if (!silent) toast(`GitHubから${stocks.length}件をSupabaseへ移行しました ☁️`, 'success');
     } else if (cloudStocks && cloudIsNewer) {
-      // 安全策: クラウドの件数がローカルより大幅に少ない場合は上書きしない
-      if (localStocks.length > 0 && cloudStocks.length < localStocks.length * 0.5) {
-        console.warn(`sbLoad: クラウド(${cloudStocks.length}件)がローカル(${localStocks.length}件)より大幅に少ないため上書きをスキップ。ローカルをアップロードします。`);
-        await _doSave();
-        if (!silent) toast(`ローカル(${localStocks.length}件)を保持しました`, 'success');
-      } else {
-        stocks            = cloudStocks.map(migrateStock);
-        portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
-        if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
-        if (Array.isArray(cloudWatchlist)) { watchlist = cloudWatchlist.map(migrateWatchlistItem); localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist)); }
-        if (Number.isFinite(cloudWatchlistBudget) && cloudWatchlistBudget >= 0) {
-          watchlistBudgetJPY = cloudWatchlistBudget;
-          localStorage.setItem(WATCHLIST_BUDGET_KEY, String(watchlistBudgetJPY));
-        }
-        // 取引履歴(transactions)は上部で和集合マージ済み。
-        // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
-        // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
-        // 差分が出て dirty になり、次の保存で正しくアップロードされる。
-        _lastSynced.sp_stocks        = _canonicalStocks();
-        _lastSynced.sp_portfolio_log = JSON.stringify(normalizePortfolioLog(cloudLog || []));
-        if (Array.isArray(cloudCollateral)) _lastSynced.sp_collateral = JSON.stringify(collateralEntries);
-        if (Array.isArray(cloudWatchlist)) _lastSynced.sp_watchlist = _canonicalWatchlist();
-        if (Number.isFinite(cloudWatchlistBudget) && cloudWatchlistBudget >= 0) _lastSynced.sp_watchlist_budget = JSON.stringify(watchlistBudgetJPY);
-        recordDailyLog();
-        lastCloudUpdatedAt = cloudUpdatedAt;
-        localStorage.setItem('stocks', JSON.stringify(stocks));
-        localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
-        localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
-        document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
-        render();
-        renderWatchlist();
-        renderPieChart();
-        renderLineChart();
-        if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
+      stocks            = cloudStocks.map(migrateStock);
+      portfolioLog      = mergePortfolioLogs(localLog, normalizePortfolioLog(cloudLog || []));
+      if (Array.isArray(cloudCollateral)) { collateralEntries = cloudCollateral; localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries)); }
+      if (Array.isArray(cloudWatchlist)) { watchlist = cloudWatchlist.map(migrateWatchlistItem); localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist)); }
+      if (Number.isFinite(cloudWatchlistBudget) && cloudWatchlistBudget >= 0) {
+        watchlistBudgetJPY = cloudWatchlistBudget;
+        localStorage.setItem(WATCHLIST_BUDGET_KEY, String(watchlistBudgetJPY));
       }
+      // 取引履歴(transactions)は上部で和集合マージ済み。
+      // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
+      // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
+      // 差分が出て dirty になり、次の保存で正しくアップロードされる。
+      _lastSynced.sp_stocks        = _canonicalStocks();
+      _lastSynced.sp_portfolio_log = JSON.stringify(normalizePortfolioLog(cloudLog || []));
+      if (Array.isArray(cloudCollateral)) _lastSynced.sp_collateral = JSON.stringify(collateralEntries);
+      if (Array.isArray(cloudWatchlist)) _lastSynced.sp_watchlist = _canonicalWatchlist();
+      if (Number.isFinite(cloudWatchlistBudget) && cloudWatchlistBudget >= 0) _lastSynced.sp_watchlist_budget = JSON.stringify(watchlistBudgetJPY);
+      recordDailyLog();
+      lastCloudUpdatedAt = cloudUpdatedAt;
+      localStorage.setItem('stocks', JSON.stringify(stocks));
+      localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
+      localStorage.setItem(LOCAL_UPDATED_AT_KEY, cloudUpdatedAt); // ← ローカルタイムスタンプをクラウドに合わせる
+      document.getElementById('lastUpdated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+      render();
+      renderWatchlist();
+      renderPieChart();
+      renderLineChart();
+      if (!silent) toast('クラウドからデータを読み込みました ☁️', 'success');
     } else {
       // ローカルの方が新しい（または初回）→ ローカルをクラウドへ移行
       await _doSave();
       if (!silent) toast('ローカルデータをクラウドに移行しました', 'success');
     }
+    loaded = true;
     updateSyncIcon('ok');
   } catch(e) {
     updateSyncIcon('error');
@@ -2077,7 +2117,10 @@ async function sbLoad(silent = false) {
     console.error('sbLoad error:', e);
   } finally {
     isSyncing = false;
-    initialLoadDone = true; // 起動時sbLoad完了 → 以降のsave()はアップロード可能
+    initialLoadDone = loaded; // 読込失敗後はクラウドを確認するまでアップロードしない
+    clearTimeout(syncTimer);
+    if (!loaded) syncTimer = setTimeout(() => sbLoad(true), 5000);
+    else if (_hasUnsyncedChanges()) scheduleSyncSave();
     setTimeout(localizeJapaneseNames, 0);
   }
 }
@@ -2140,7 +2183,7 @@ function updateSyncIcon(state) {
 
 // ── Init ──────────────────────────────────────────────────────────
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
-stocks = raw.length ? raw.map(migrateStock) : defaultStocks();
+stocks = localStorage.getItem('stocks') !== null ? raw.map(migrateStock) : defaultStocks();
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
 try { transactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) { transactions = []; }
@@ -2432,6 +2475,10 @@ function cacheAgeText(ts) {
 // ── Persistence ───────────────────────────────────────────────────
 
 function save(skipSync = false) {
+  let previousTransactions = [];
+  try { previousTransactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) {}
+  recordTransactionDeletions(previousTransactions, transactions);
+  localStorage.setItem(TX_DELETIONS_KEY, JSON.stringify(transactionDeletions));
   localStorage.setItem('stocks', JSON.stringify(stocks));
   localStorage.setItem(PORTFOLIO_LOG_KEY, JSON.stringify(portfolioLog));
   localStorage.setItem(COLLATERAL_KEY, JSON.stringify(collateralEntries));
@@ -2445,6 +2492,7 @@ function save(skipSync = false) {
     _canonicalStocks() !== _lastSynced.sp_stocks ||
     JSON.stringify(collateralEntries) !== _lastSynced.sp_collateral ||
     JSON.stringify(transactions) !== _lastSynced.sp_transactions ||
+    JSON.stringify(transactionDeletions) !== _lastSynced.sp_transaction_deletions ||
     _canonicalWatchlist() !== _lastSynced.sp_watchlist ||
     JSON.stringify(watchlistBudgetJPY) !== _lastSynced.sp_watchlist_budget;
   if (userDataChanged) {
@@ -4370,13 +4418,14 @@ function txDupKey(t) {
     return 'R|' + [t.date, t.ticker || t.name, t.quantity, Math.round(t.realizedPLJPY)].join('|');
   return 'H|' + (t.importHash || t.id);
 }
-// 取引履歴を端末間でマージ（和集合）。同一取引（txDupKey一致）は1件にまとめ、
+// 取引履歴を端末間でマージ。同一IDだけを1件にまとめ、削除履歴を適用する。
 // 取得単価・配当など欠けている項目を補完する。これにより端末間で取引を失わない。
-function mergeTransactions(localTx, cloudTx) {
+function mergeTransactions(localTx, cloudTx, deletions = {}) {
   const map = new Map();
   const add = t => {
-    if (!t) return;
-    const k  = txDupKey(t);
+    if (!t || deletions[t.id]?.deleted) return;
+    // CSV内の重複判定とは分離し、同条件の別約定を保持する。
+    const k = t.id || t.importHash || JSON.stringify(t);
     const ex = map.get(k);
     if (!ex) { map.set(k, t); return; }
     if (ex.avgCost == null && Number.isFinite(t.avgCost)) ex.avgCost = t.avgCost;
