@@ -1439,7 +1439,7 @@ let usdJpyRate    = (() => {
 })();
 let apiOnline     = false;
 let isFetching    = false;
-let isFetchQueued = false;
+let priceRetryTimer = null;
 let editId        = null;
 const STOCK_FORM_DRAFT_KEY = 'stock_form_draft_v1';
 let stockFormBaseline = null;
@@ -2518,11 +2518,10 @@ async function checkAPI() {
   const label = document.getElementById('apiLabel');
   dot.style.background = 'var(--yellow)';
   label.textContent    = '確認中...';
-  // Render はコールドスタートで最大60秒かかるため、ヘルスチェックを先に待つ。
-  // wakeRender 中はラベルを切り替えてユーザーに状況を伝える。
+  // 起動確認と価格取得を並行させ、ヘルスチェックの遅延で表示を止めない。
   if (API_BASE) {
     label.textContent = 'サーバ起動中...';
-    try { await wakeRender(); } catch(e) {}
+    wakeRender(); // 起動確認は価格取得と並行して進める
   }
   // 接続テスト用の単独取得（旧: AAPL 1銘柄）は廃止。
   // 全銘柄バッチの結果から fetchAllPrices がAPI状態を判定・表示するため、
@@ -2592,59 +2591,118 @@ function normalizeBackendPrice(ticker, data) {
   };
 }
 
-async function fetchAllPrices() {
-  if (isFetching) {
-    if (!isFetchQueued) { isFetchQueued = true; setTimeout(() => { isFetchQueued = false; fetchAllPrices(); }, 1500); }
-    return;
+// 通信が中断に応じない場合も、呼び出し元は期限で戻る。
+async function runPriceRequest(worker, parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parentSignal?.reason || new DOMException('Timeout', 'TimeoutError'));
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(controller.signal.reason);
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  if (parentSignal?.aborted) abort();
+  else parentSignal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, timeoutMs);
+  try {
+    return await Promise.race([
+      aborted,
+      Promise.resolve().then(() => {
+        controller.signal.throwIfAborted();
+        return worker(controller.signal);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener('abort', abort);
+    controller.signal.removeEventListener('abort', onAbort);
   }
+}
+
+// 全体20秒、バックエンド8秒。取得済みの価格は後続の通信を待たず通知する。
+async function collectPrices(tickers, onPrices, totalMs = 20000, backendMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), totalMs);
+  const prices = {};
+  const accept = (batch, signal) => {
+    if (controller.signal.aborted || signal.aborted) return;
+    Object.assign(prices, batch);
+    onPrices(batch);
+  };
+  try {
+    if (typeof API_BASE === 'string') {
+      try {
+        await runPriceRequest(async signal => {
+          const batches = [];
+          for (let i = 0; i < tickers.length; i += 16) batches.push(tickers.slice(i, i + 16));
+          await mapWithConcurrency(batches, 2, async batch => {
+            signal.throwIfAborted();
+            const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(batch.join(','))}`, {
+              signal, cache: 'no-store',
+            });
+            if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
+            const data = await res.json();
+            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
+            const normalized = {};
+            for (const ticker of batch) {
+              const value = normalizeBackendPrice(ticker, data[ticker]);
+              if (value) normalized[ticker] = value;
+            }
+            accept(normalized, signal);
+          });
+        }, controller.signal, backendMs);
+      } catch(e) { /* 未取得分は残り時間内で代替取得する */ }
+    }
+    const missing = tickers.filter(t => !prices[t]?.price);
+    await mapWithConcurrency(missing, 4, async ticker => {
+      if (controller.signal.aborted) return;
+      try {
+        await runPriceRequest(async signal => {
+          const value = await getCurrentPriceViaCors(ticker, signal);
+          if (Number.isFinite(value?.price) && value.price > 0) accept({ [ticker]: { ticker, ...value } }, signal);
+        }, controller.signal, 15000);
+      } catch(e) { /* 失敗した銘柄だけ次回再試行する */ }
+    });
+    return { prices, timedOut: controller.signal.aborted };
+  } finally { clearTimeout(timer); }
+}
+
+function showPartialPrices(prices) {
+  if (!Object.keys(prices).length) return;
+  const now = new Date().toISOString();
+  const apply = s => {
+    const d = prices[s.yahooTicker];
+    if (!d?.price) return s; // 未取得銘柄の既存表示はそのまま残す
+    return { ...s, currentPrice: d.price, prevClose: d.prev_close ?? null,
+      dayChange: d.day_change ?? (d.prev_close != null ? d.price - d.prev_close : null),
+      currency: d.currency || s.currency, lastFetched: now, lastAttempted: now,
+      fetchError: d.stale ? '古いキャッシュ' : null, navDate: d.nav_date ?? null };
+  };
+  stocks = stocks.map(apply);
+  watchlist = watchlist.map(apply);
+  if (prices['USDJPY=X']) {
+    usdJpyRate = prices['USDJPY=X'].price;
+    document.getElementById('rateValue').textContent = usdJpyRate.toFixed(2);
+  }
+  render(true);
+  renderWatchlist(true);
+}
+
+async function fetchAllPrices(options = {}) {
+  if (isFetching) return; // 実行中の連打で全件取得を繰り返さない
+  clearTimeout(priceRetryTimer);
   isFetching = true;
   const btn = document.getElementById('fetchBtn');
   btn.innerHTML = '<span class="spin">⏳</span> 取得中...';
-  btn.disabled  = true;
+  btn.disabled = true;
 
   try {
-    // 保有銘柄・買いたい候補・USDJPY を重複なしで取得
-    const allTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
-    const priceMap   = {};
-
-    // ── Step1: バックエンドへ最大64件ずつ、同時2バッチまで ──
-    if (typeof API_BASE === 'string') {
-      try {
-        if (API_BASE) await wakeRender(); // スリープ中のRenderが起動するまで待機（最大65秒）
-        const batches = [];
-        for (let i = 0; i < allTickers.length; i += 64) batches.push(allTickers.slice(i, i + 64));
-        const responses = await mapWithConcurrency(batches, 2, async batch => {
-          const res = await fetch(`${API_BASE}/api/prices?tickers=${encodeURIComponent(batch.join(','))}`, {
-            signal: AbortSignal.timeout(45000), cache: 'no-store',
-          });
-          if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
-          const data = await res.json();
-          if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
-          return data;
-        });
-        responses.forEach(response => {
-          if (response.status !== 'fulfilled') return;
-          Object.entries(response.value).forEach(([ticker, data]) => {
-            const normalized = normalizeBackendPrice(ticker, data);
-            if (normalized) priceMap[ticker] = normalized;
-          });
-        });
-      } catch(e) { console.warn('価格APIバッチ取得:', e?.message || e); }
-    }
-
-    // ── Step2: 未取得分を同時4件に制限し、15秒で通信自体を中止 ──
-    const missing = allTickers.filter(t => !priceMap[t]?.price);
-    if (missing.length) {
-      const corsResults = await mapWithConcurrency(missing, 4, async ticker => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), 15000);
-        try { return { ticker, ...await getCurrentPriceViaCors(ticker, controller.signal) }; }
-        finally { clearTimeout(timeoutId); }
-      });
-      corsResults.forEach(r => {
-        if (r.status === 'fulfilled' && r.value?.ticker && r.value?.price) priceMap[r.value.ticker] = r.value;
-      });
-    }
+    const heldTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
+    const allTickers = options.tickers ? heldTickers.filter(t => options.tickers.includes(t)) : heldTickers;
+    const requested = new Set(allTickers);
+    const oldPrices = new Map(stocks.concat(watchlist).map(s => [s.id, s.currentPrice]));
+    const { prices: priceMap, timedOut } = await collectPrices(allTickers, batch => {
+      showPartialPrices(batch);
+      btn.innerHTML = '<span class="spin">⏳</span> 取得済みから表示中...';
+    });
 
     // USDJPY 更新
     if (priceMap['USDJPY=X']) {
@@ -2658,9 +2716,10 @@ async function fetchAllPrices() {
     let updated = 0, failed = 0, changed = 0, unchanged = 0;
     const now = new Date().toISOString();
     const cache = loadPriceCache();
-    const oldPrices = new Map(stocks.concat(watchlist).map(s => [s.id, s.currentPrice]));
+
 
     const applyPrice = (s, flash = false) => {
+      if (!requested.has(s.yahooTicker)) return s;
       const d = priceMap[s.yahooTicker];
       if (d?.price) {
         updated++;
@@ -2703,7 +2762,7 @@ async function fetchAllPrices() {
     watchlist = watchlist.map(s => applyPrice(s, false));
 
     // 成功分をキャッシュ保存
-    if (updated > 0) savePriceCache(priceMap, usdJpyRate);
+    if (updated > 0) savePriceCache({ ...cache?.prices, ...priceMap }, usdJpyRate);
 
     // API ステータス更新
     const dot = document.getElementById('apiDot');
@@ -2773,6 +2832,12 @@ async function fetchAllPrices() {
       toastMsg = `${changed}件の価格を更新しました`;
       toastType = 'success';
     }
+    const missing = allTickers.filter(t => !priceMap[t]?.price);
+    if (missing.length && !options.retry) {
+      priceRetryTimer = setTimeout(() => fetchAllPrices({ tickers: missing, retry: true }), 30000);
+      toastMsg += `（未取得${missing.length}銘柄は30秒後に再試行）`;
+    }
+    if (timedOut) toastMsg = '待ち時間の上限に達しました。' + toastMsg;
     toast(toastMsg, toastType);
   } catch (e) {
     console.error('fetchAllPrices error:', e);
