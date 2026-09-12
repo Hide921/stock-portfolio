@@ -1,7 +1,7 @@
 // ── Service Worker ──────────────────────────────────────────────
 // アプリシェル（HTML/アイコン/CDN）をキャッシュし、オフラインでも起動可能にする。
 // 株価・クラウド同期などの動的データは常にネットワークから取得（キャッシュしない）。
-const CACHE = 'portfolio-v14';
+const CACHE = 'portfolio-v15';
 const SHELL = ['./', './index.html', './favicon.svg', './manifest.json'];
 
 // データ系リクエストはキャッシュせず常にネットワークへ（鮮度が命）
@@ -46,25 +46,25 @@ self.addEventListener('fetch', e => {
   try { url = new URL(req.url); } catch { return; }
 
   // 動的データ（API・株価・クラウド）はキャッシュせずネットワーク直結
-  if (url.pathname.startsWith('/api/') || BYPASS_HOSTS.some(h => url.hostname.endsWith(h))) return;
+  if (url.pathname.startsWith('/api/') || (req.mode !== 'navigate' && BYPASS_HOSTS.some(h => url.hostname.endsWith(h)))) return;
 
-  // ページ遷移（=アプリ起動）: network-first。
-  // オンライン時は必ず最新版を表示し、通信失敗時だけキャッシュへフォールバックする。
+  // 起動は保存済み画面を即返す。最新版の確認は裏で進める。
   if (req.mode === 'navigate') {
-    e.respondWith(
-      fetch(req, { cache: 'no-store' })
-        .then(async response => {
-          if (response && response.ok) {
-            const cache = await caches.open(CACHE);
-            await Promise.all([
-              cache.put(req, response.clone()),
-              cache.put('./index.html', response.clone()),
-            ]);
-          }
-          return response;
-        })
-        .catch(async () => (await caches.match(req)) || (await caches.match('./index.html')))
-    );
+    const cached = caches.open(CACHE).then(async cache =>
+      (await cache.match(req)) || (await cache.match('./index.html')));
+    const network = fetch(req, { cache: 'no-store' }).then(async response => {
+      if (response && response.ok) {
+        const cache = await caches.open(CACHE);
+        await Promise.all([
+          cache.put(req, response.clone()),
+          cache.put('./index.html', response.clone()),
+        ]);
+      }
+      return response;
+    });
+    // オフライン時の失敗を処理し、タブが閉じても更新処理を完了させる。
+    e.waitUntil(network.catch(() => {}));
+    e.respondWith(cached.then(hit => hit || network));
     return;
   }
 

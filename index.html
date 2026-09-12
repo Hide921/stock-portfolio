@@ -17,11 +17,11 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="preconnect" href="https://ugyashjjxoezvlnjtizw.supabase.co" crossorigin>
   <link rel="dns-prefetch" href="https://stock-portfolio-1-2rnh.onrender.com">
-  <!-- defer: HTML パースと初回描画をブロックしない。両ライブラリは起動後 Phase B で使う。 -->
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+  <!-- グラフと同期を独立して読み込み、片方の遅延で他方を待たせない。 -->
+  <script id="chartLibrary" async src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
           integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.104.1"
+  <script id="syncLibrary" async src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.104.1"
           integrity="sha384-ZstPgNL30sIz6Hlxmz87Qsg817okoeAfmzXv89YLICmfsKv3pEdQKOokOL2IpVAS"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
@@ -2408,22 +2408,26 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// ── Phase B: CDN(chart.js / supabase-js) ロード後に実行 ───────────────
-// defer スクリプトは DOMContentLoaded より前に実行されるため、この時点で
-// Chart / supabase は利用可能。CDN 取得に失敗しても各機能を個別にスキップし、
-// テーブル表示・価格更新（Phase A）はそのまま動く＝劣化動作で止まらない。
-function bootLibsReady() {
+// ── Phase B: 各ライブラリが準備できた時点で独立して開始 ──────────
+function bootChartsReady() {
+  if (!window.Chart) return;
   // 円グラフ・資産推移グラフ（Chart 依存。未ロードなら各関数が内部で no-op）
   renderPieChart();
   fetchHistory(currentPeriod);
 
-  // クラウド同期（supabase 依存）
+}
+
+let syncBootStarted = false;
+function bootLibsReady() {
+  if (syncBootStarted || (!window.supabase && !LOCAL_ONLY_MODE)) return;
+  syncBootStarted = true;
+  // クラウド同期はグラフライブラリを待たず開始する。
   if (window.supabase && !LOCAL_ONLY_MODE) {
     _sb = supabase.createClient(_SB_URL, _SB_KEY);
 
     // 起動時にSupabaseからデータを読み込む（ローカルデータがあれば移行も行う）
     updateSyncIcon('syncing');
-    setTimeout(() => sbLoad(true), 800);
+    sbLoad(true);
 
     // Supabase Realtimeで他デバイスの変更を即時検知
     _sb.channel('portfolio_sync')
@@ -2454,11 +2458,11 @@ function bootLibsReady() {
     setTimeout(localizeJapaneseNames, 0);
   }
 }
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootLibsReady, { once: true });
-} else {
-  bootLibsReady();   // 既にパース完了済みなら（defer 実行後）即起動
-}
+document.getElementById('chartLibrary').addEventListener('load', bootChartsReady, { once: true });
+document.getElementById('syncLibrary').addEventListener('load', bootLibsReady, { once: true });
+document.getElementById('syncLibrary').addEventListener('error', () => updateSyncIcon('error'), { once: true });
+// 既に読み込み済みの場合にも対応し、初期化用の定数が揃ってから実行する。
+setTimeout(() => { bootChartsReady(); bootLibsReady(); }, 0);
 
 // ── Price cache (API障害時のフォールバック) ─────────────────────────
 const PRICE_CACHE_KEY = 'portfolio_price_cache_v1';
