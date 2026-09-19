@@ -2644,52 +2644,83 @@ async function runPriceRequest(worker, parentSignal, timeoutMs) {
   }
 }
 
-// 全体20秒、バックエンド8秒。取得済みの価格は後続の通信を待たず通知する。
-async function collectPrices(tickers, onPrices, totalMs = 20000, backendMs = 8000) {
+// サーバーの裏更新を同じ取得期間中に回収し、次の30秒後まで待たせない。
+async function collectPrices(tickers, onPrices, totalMs = 20000, backendMs = 8000, pollMs = 1500) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), totalMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException('Timeout', 'TimeoutError'));
+  }, totalMs);
   const prices = {};
+  const missing = () => tickers.filter(t => !prices[t]?.price || prices[t]?.stale);
   const accept = (batch, signal) => {
     if (controller.signal.aborted || signal.aborted) return;
-    Object.assign(prices, batch);
-    onPrices(batch);
+    const changes = {};
+    for (const [ticker, value] of Object.entries(batch)) {
+      // 遅れて届いた保存値で取得済みの価格を巻き戻さない。
+      if (prices[ticker]?.price && !prices[ticker].stale) continue;
+      if (value.stale && prices[ticker]?.price === value.price && prices[ticker]?.stale) continue;
+      prices[ticker] = value;
+      changes[ticker] = value;
+    }
+    if (Object.keys(changes).length) onPrices(changes);
+    if (!missing().length) controller.abort(); // 全件揃ったら遅い代替通信も止める
   };
+  const fetchBackend = async (targets, signal) => {
+    const batches = [];
+    for (let i = 0; i < targets.length; i += 16) batches.push(targets.slice(i, i + 16));
+    await mapWithConcurrency(batches, 2, async batch => {
+      signal.throwIfAborted();
+      const res = await fetch(`${API_BASE}/api/prices?mode=cached&tickers=${encodeURIComponent(batch.join(','))}`, {
+        signal, cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
+      const normalized = {};
+      for (const ticker of batch) {
+        const value = normalizeBackendPrice(ticker, data[ticker]);
+        if (value) normalized[ticker] = value;
+      }
+      accept(normalized, signal);
+    });
+  };
+  const pause = () => new Promise(resolve => {
+    const done = () => { clearTimeout(id); controller.signal.removeEventListener('abort', done); resolve(); };
+    const id = setTimeout(done, pollMs);
+    controller.signal.addEventListener('abort', done, { once: true });
+    if (controller.signal.aborted) done();
+  });
   try {
     if (typeof API_BASE === 'string') {
-      try {
-        await runPriceRequest(async signal => {
-          const batches = [];
-          for (let i = 0; i < tickers.length; i += 16) batches.push(tickers.slice(i, i + 16));
-          await mapWithConcurrency(batches, 2, async batch => {
-            signal.throwIfAborted();
-            const res = await fetch(`${API_BASE}/api/prices?mode=cached&tickers=${encodeURIComponent(batch.join(','))}`, {
-              signal, cache: 'no-store',
-            });
-            if (!res.ok) throw new Error(`価格API HTTP ${res.status}`);
-            const data = await res.json();
-            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid price payload');
-            const normalized = {};
-            for (const ticker of batch) {
-              const value = normalizeBackendPrice(ticker, data[ticker]);
-              if (value) normalized[ticker] = value;
-            }
-            accept(normalized, signal);
-          });
-        }, controller.signal, backendMs);
-      } catch(e) { /* 未取得分は残り時間内で代替取得する */ }
+      try { await runPriceRequest(signal => fetchBackend(tickers, signal), controller.signal, backendMs); }
+      catch(e) { /* 残り時間で代替取得と裏更新の回収を進める */ }
     }
-    const missing = tickers.filter(t => !prices[t]?.price || prices[t]?.stale);
-    await mapWithConcurrency(missing, 4, async ticker => {
-      if (controller.signal.aborted) return;
+    const fallback = mapWithConcurrency(missing(), 4, async ticker => {
+      if (controller.signal.aborted || (prices[ticker]?.price && !prices[ticker].stale)) return;
       try {
         await runPriceRequest(async signal => {
           const value = await getCurrentPriceViaCors(ticker, signal);
           if (Number.isFinite(value?.price) && value.price > 0) accept({ [ticker]: { ticker, ...value } }, signal);
         }, controller.signal, 15000);
-      } catch(e) { /* 失敗した銘柄だけ次回再試行する */ }
+      } catch(e) { /* サーバー側で取得できた場合も中断される */ }
     });
-    return { prices, timedOut: controller.signal.aborted };
-  } finally { clearTimeout(timer); }
+    const poll = async () => {
+      if (typeof API_BASE !== 'string') return;
+      while (!controller.signal.aborted && missing().length) {
+        await pause();
+        if (controller.signal.aborted) break;
+        try { await runPriceRequest(signal => fetchBackend(missing(), signal), controller.signal, Math.min(backendMs, 3000)); }
+        catch(e) { /* 全体の期限内で次の確認へ */ }
+      }
+    };
+    await Promise.all([fallback, poll()]);
+    return { prices, timedOut };
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 function showPartialPrices(prices) {

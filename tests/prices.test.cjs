@@ -22,6 +22,42 @@ function context(extra = {}) {
 const response = data => ({ ok: true, json: async () => data });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('裏更新が完了した価格を同じ取得期間中に回収し、遅い代替通信を止める', async () => {
+  const requested = [], events = [];
+  let fallbackSignal;
+  const ctx = context({
+    fetch: async url => {
+      requested.push(url);
+      return response(requested.length === 1
+        ? { A:{price:10}, B:{price:9,stale:true} }
+        : { B:{price:12} });
+    },
+    getCurrentPriceViaCors: (_, signal) => {
+      fallbackSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  const result = await ctx.collectPrices(['A','B'], batch => events.push(batch), 500, 100, 10);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.prices.B.price, 12);
+  assert.equal(fallbackSignal.aborted, true);
+  assert.equal(requested.length, 2);
+  assert.match(requested[1], /tickers=B$/);
+  assert.equal(events.length, 2);
+});
+
+test('同じ古い価格の確認を繰り返しても再描画せず全体期限で終了する', async () => {
+  let renders = 0;
+  const ctx = context({
+    fetch: async () => response({ A:{price:10,stale:true} }),
+    getCurrentPriceViaCors: async () => { throw new Error('取得不能'); },
+  });
+  const result = await ctx.collectPrices(['A'], () => { renders++; }, 80, 20, 10);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.prices.A.price, 10);
+  assert.equal(renders, 1);
+});
+
 test('古いサーバー保存値は表示しつつ代替取得で更新する', async () => {
   const events = [];
   const ctx = context({
