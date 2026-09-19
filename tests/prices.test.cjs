@@ -130,7 +130,7 @@ test('30秒後の再試行は未取得分だけに限定し、再試行を繰り
   });
   vm.runInContext(`
     let stocks = [{id:'a',yahooTicker:'A',currentPrice:1},{id:'b',yahooTicker:'B',currentPrice:2}];
-    let watchlist = [], priceRetryTimer = null, isFetching = false, usdJpyRate = 150;
+    let watchlist = [], priceRetryTimer = null, priceRefreshQueued = false, isFetching = false, usdJpyRate = 150;
     let _flashMap = {}, apiOnline = false, lastPriceFetchTs = 0, _sb = null;
   `, ctx);
   ctx.collectPrices = async tickers => {
@@ -138,6 +138,9 @@ test('30秒後の再試行は未取得分だけに限定し、再試行を繰り
     return { prices: calls.length === 1 ? { A: { price: 10 }, 'USDJPY=X': { price: 150 } } : {}, timedOut: true };
   };
   vm.runInContext(source('fetchAllPrices'), ctx);
+  await ctx.fetchAllPrices({ tickers: ['deleted'], retry: true });
+  assert.equal(calls.length, 0);
+  assert.equal(timers.length, 0);
   await ctx.fetchAllPrices();
   assert.equal(timers.length, 1);
   assert.equal(timers[0].ms, 30000);

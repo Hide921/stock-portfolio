@@ -114,6 +114,7 @@ test('保存済みの空の銘柄一覧をサンプルで置き換えない', ()
 function loadContext(readCloud) {
   const ctx = context({
     readCloud, console: { error() {} },
+    portfolioTickerSignature: () => "", requestPortfolioPrices() {},
     document: { getElementById: () => ({}) },
     normalizePortfolioLog: x => x, mergePortfolioLogs: (a, b) => b,
     migrateStock: x => x, migrateWatchlistItem: x => x,
@@ -147,4 +148,14 @@ test('初回読込失敗では自動アップロードを有効にしない', as
   const ctx = loadContext(async () => { throw new Error('読込失敗'); });
   await ctx.sbLoad(true);
   assert.equal(vm.runInContext('initialLoadDone', ctx), false);
+});
+
+test('初回クラウド読込で保有銘柄が揃ったら価格取得を開始する', async () => {
+  const ctx = loadContext(async key => key === 'sp_stocks'
+    ? { value: [{id:'actual',yahooTicker:'REAL'}], updated_at:'2026-09-19T00:00:00Z' } : null);
+  let requested = 0;
+  ctx.requestPortfolioPrices = () => { requested++; };
+  await ctx.sbLoad(true);
+  assert.equal(requested, 1);
+  assert.equal(vm.runInContext('stocks[0].yahooTicker', ctx), 'REAL');
 });

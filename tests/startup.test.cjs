@@ -6,6 +6,36 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
+test('保存銘柄のない初回はサンプルの価格取得を始めない', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const start = html.indexOf('function startInitialPrices(');
+  const code = html.slice(start, html.indexOf('\n}', start) + 2);
+  let requests = 0, saved = null;
+  const ctx = vm.createContext({
+    LOCAL_ONLY_MODE: false, localStorage: { getItem: () => saved },
+    document: { getElementById: () => ({}) }, checkAPI: () => { requests++; },
+  });
+  vm.runInContext(code, ctx);
+  ctx.startInitialPrices();
+  assert.equal(requests, 0);
+  saved = '[]';
+  ctx.startInitialPrices();
+  assert.equal(requests, 1);
+});
+
+test('取得中に同期で銘柄が変わった場合は再取得を予約する', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const start = html.indexOf('function requestPortfolioPrices(');
+  const code = html.slice(start, html.indexOf('\n}', start) + 2);
+  let calls = 0;
+  const ctx = vm.createContext({ clearTimeout() {}, fetchAllPrices: () => { calls++; } });
+  vm.runInContext('let isFetching = true, priceRefreshQueued = false, priceRetryTimer = null;', ctx);
+  vm.runInContext(code, ctx);
+  ctx.requestPortfolioPrices();
+  assert.equal(calls, 0);
+  assert.equal(vm.runInContext('priceRefreshQueued', ctx), true);
+});
+
 test('初回同期は1リクエストで読み、要求順に行を返す', async () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const start = html.indexOf('async function _sbGetAll(');

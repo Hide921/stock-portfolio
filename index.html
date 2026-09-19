@@ -1454,6 +1454,7 @@ let usdJpyRate    = (() => {
 let apiOnline     = false;
 let isFetching    = false;
 let priceRetryTimer = null;
+let priceRefreshQueued = false;
 let editId        = null;
 const STOCK_FORM_DRAFT_KEY = 'stock_form_draft_v1';
 let stockFormBaseline = null;
@@ -2025,6 +2026,8 @@ async function _fetchFromGist(pat, gistId) {
 async function sbLoad(silent = false) {
   if (isSyncing) return;
   let loaded = false;
+  const firstLoad = !initialLoadDone;
+  const previousTickers = portfolioTickerSignature();
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
@@ -2140,6 +2143,7 @@ async function sbLoad(silent = false) {
     clearTimeout(syncTimer);
     if (!loaded) syncTimer = setTimeout(() => sbLoad(true), 5000);
     else if (_hasUnsyncedChanges()) scheduleSyncSave();
+    if (loaded && ((firstLoad && !previousTickers) || previousTickers !== portfolioTickerSignature())) requestPortfolioPrices();
     setTimeout(localizeJapaneseNames, 0);
   }
 }
@@ -2202,7 +2206,7 @@ function updateSyncIcon(state) {
 
 // ── Init ──────────────────────────────────────────────────────────
 const raw = JSON.parse(localStorage.getItem('stocks') || '[]');
-stocks = localStorage.getItem('stocks') !== null ? raw.map(migrateStock) : defaultStocks();
+stocks = localStorage.getItem('stocks') !== null ? raw.map(migrateStock) : (LOCAL_ONLY_MODE ? defaultStocks() : []);
 portfolioLog = normalizePortfolioLog(JSON.parse(localStorage.getItem(PORTFOLIO_LOG_KEY) || '[]'));
 try { collateralEntries = JSON.parse(localStorage.getItem(COLLATERAL_KEY) || '[]'); } catch(e) { collateralEntries = []; }
 try { transactions = JSON.parse(localStorage.getItem(TRANSACTIONS_KEY) || '[]'); } catch(e) { transactions = []; }
@@ -2379,7 +2383,7 @@ function updateCountdownLabel() {
 // ブロックされず、起動直後にすぐ画面が出る。
 render();
 setTimeout(restoreStockFormDraftModal, 0);
-checkAPI();
+startInitialPrices();
 // Render サーバーを事前起動（Free プランはスリープするため、ページ読み込み時にウォームアップ）
 wakeRender();
 
@@ -2725,8 +2729,30 @@ function updatePriceProgress(tickers, prices, finished = false, retry = false) {
     (finished ? (ready === tickers.length ? '表示価格を更新しました。' : retry ? '保存値・未取得の銘柄は30秒後に再試行します。' : '保存値は最新価格ではありません。必要な銘柄を下の一覧から再取得できます。') : '取得済みから表示します。操作はそのまま続けられます。');
 }
 
+function portfolioTickerSignature() {
+  return [...new Set(stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean))].sort().join(',');
+}
+
+function startInitialPrices() {
+  if (LOCAL_ONLY_MODE || localStorage.getItem('stocks') !== null) {
+    checkAPI();
+  } else {
+    document.getElementById('priceProgressTitle').textContent = '保有銘柄を読み込んでいます';
+    document.getElementById('priceProgressDetail').textContent = '読み込み後、保有銘柄の価格を自動で更新します。';
+  }
+}
+
+function requestPortfolioPrices() {
+  clearTimeout(priceRetryTimer);
+  if (isFetching) priceRefreshQueued = true;
+  else fetchAllPrices();
+}
+
 async function fetchAllPrices(options = {}) {
   if (isFetching) return; // 実行中の連打で全件取得を繰り返さない
+  const heldTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
+  const allTickers = options.tickers ? heldTickers.filter(t => options.tickers.includes(t)) : heldTickers;
+  if (!allTickers.length) return; // 同期後に対象が消えた再試行で進捗を0/0にしない
   clearTimeout(priceRetryTimer);
   isFetching = true;
   const btn = document.getElementById('fetchBtn');
@@ -2734,8 +2760,6 @@ async function fetchAllPrices(options = {}) {
   btn.disabled = true;
 
   try {
-    const heldTickers = [...new Set([...stocks.concat(watchlist).map(s => s.yahooTicker).filter(Boolean), 'USDJPY=X'])];
-    const allTickers = options.tickers ? heldTickers.filter(t => options.tickers.includes(t)) : heldTickers;
     const requested = new Set(allTickers);
     const progressPrices = {};
     updatePriceProgress(allTickers, progressPrices);
@@ -2898,6 +2922,11 @@ async function fetchAllPrices(options = {}) {
     renderPriceIssues();
     lastPriceFetchTs = Date.now();
     resetAutoRefreshSchedule(); // カウントダウンリセット（閉場中は長め）
+    if (priceRefreshQueued) {
+      priceRefreshQueued = false;
+      clearTimeout(priceRetryTimer);
+      setTimeout(() => fetchAllPrices(), 0);
+    }
   }
 }
 
