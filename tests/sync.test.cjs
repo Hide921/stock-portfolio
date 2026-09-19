@@ -126,6 +126,7 @@ function loadContext(readCloud) {
     const PORTFOLIO_LOG_KEY = 'log', COLLATERAL_KEY = 'collateral';
     const WATCHLIST_KEY = 'watchlist', WATCHLIST_BUDGET_KEY = 'budget';
   `, ctx);
+  ctx._sbGetAll = keys => Promise.all(keys.map(readCloud));
   vm.runInContext(source('sbLoad'), ctx);
   ctx._doSave = async () => { throw new Error('読み込むべき状態で保存が呼ばれた'); };
   return ctx;

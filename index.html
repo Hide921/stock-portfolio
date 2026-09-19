@@ -1882,6 +1882,16 @@ async function _sbGet(key) {
   return data ?? null;
 }
 
+// 初回同期を1往復にまとめ、通信が止まっても期限で再試行へ移る。
+async function _sbGetAll(keys) {
+  const { data, error } = await _sb.from('user_data')
+    .select('key,value,updated_at').in('key', keys)
+    .abortSignal(AbortSignal.timeout(8000));
+  if (error) throw error;
+  const rows = new Map((data || []).map(row => [row.key, row]));
+  return keys.map(key => rows.get(key) || null);
+}
+
 async function _sbGetUpdatedAt(key) {
   const { data, error } = await _sb.from('user_data').select('updated_at').eq('key', key).maybeSingle();
   if (error) throw error;
@@ -2018,14 +2028,9 @@ async function sbLoad(silent = false) {
   isSyncing = true;
   updateSyncIcon('syncing');
   try {
-    const [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow, deletionsRow] = await Promise.all([
-      _sbGet('sp_stocks'),
-      _sbGet('sp_portfolio_log'),
-      _sbGet('sp_collateral'),
-      _sbGet('sp_transactions'),
-      _sbGet('sp_watchlist'),
-      _sbGet('sp_watchlist_budget'),
-      _sbGet('sp_transaction_deletions'),
+    const [stocksRow, logRow, collateralRow, txRow, watchRow, watchBudgetRow, deletionsRow] = await _sbGetAll([
+      'sp_stocks', 'sp_portfolio_log', 'sp_collateral', 'sp_transactions',
+      'sp_watchlist', 'sp_watchlist_budget', 'sp_transaction_deletions',
     ]);
     const cloudStocks     = stocksRow?.value      ?? null;
     const cloudLog        = logRow?.value          ?? null;

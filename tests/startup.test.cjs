@@ -6,6 +6,28 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
+test('初回同期は1リクエストで読み、要求順に行を返す', async () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const start = html.indexOf('async function _sbGetAll(');
+  const code = html.slice(start, html.indexOf('\n}', start) + 2);
+  let requests = 0;
+  const ctx = vm.createContext({
+    AbortSignal,
+    _sb: { from: () => { requests++; return {
+      select: () => ({ in: () => ({ abortSignal: async signal => {
+        assert.equal(signal.aborted, false);
+        return { data: [{ key:'b', value:2 }, { key:'a', value:1 }], error:null };
+      } }) }),
+    }; } },
+  });
+  vm.runInContext(code, ctx);
+  const rows = await ctx._sbGetAll(['a','b','missing']);
+  assert.equal(requests, 1);
+  assert.equal(rows[0].value, 1);
+  assert.equal(rows[1].value, 2);
+  assert.equal(rows[2], null);
+});
+
 for (const host of ['hide921.github.io', 'stock-portfolio-1-2rnh.onrender.com']) {
   test(`${host}: 起動時は通信が止まっていても保存済み画面を返す`, async () => {
     const handlers = {};
