@@ -1788,6 +1788,18 @@ function normalizePortfolioLog(log) {
 
 // ── Migration ─────────────────────────────────────────────────────
 function migrateStock(s) {
+  // 旧サンプルに別ファンドの協会コードが設定されていたため、名称も一致する行だけ補正する。
+  if (s.market === 'FUND' && s.ticker === '0131103C' && s.name === 'eMAXIS Slim 全世界株式') {
+    s.ticker = '0331418A';
+    s.yahooTicker = '0331418A.T';
+    s.name = 'eMAXIS Slim 全世界株式（オール・カントリー）';
+    s.currentPrice = null;
+    s.prevClose = null;
+    s.dayChange = null;
+    s.lastFetched = null;
+    s.fetchError = null;
+    s.navDate = null;
+  }
   // 暗号資産の名称→ティッカー変換マップ（誤登録の自動修正用）
   const _cryptoAliases = { BITCOIN:'BTC', ETHEREUM:'ETH', RIPPLE:'XRP', SOLANA:'SOL', DOGECOIN:'DOGE', CARDANO:'ADA', LITECOIN:'LTC' };
   const upperTicker = (s.ticker || '').toUpperCase();
@@ -1865,7 +1877,7 @@ function defaultStocks() {
     { id: uid(), ticker:'9984',     yahooTicker:'9984.T',     name:'ソフトバンクG',          market:'JP',   sector:'IT',                 currency:'JPY', quantity:200, avgPrice:7200,  currentPrice:8450,  prevClose:8300,  note:'',        lastFetched:null, fetchError:null },
     { id: uid(), ticker:'AAPL',     yahooTicker:'AAPL',       name:'Apple Inc.',             market:'US',   sector:'テクノロジー',        currency:'USD', quantity:30,  avgPrice:175,   currentPrice:185.5, prevClose:183.2, note:'',        lastFetched:null, fetchError:null },
     { id: uid(), ticker:'NVDA',     yahooTicker:'NVDA',       name:'NVIDIA Corp.',           market:'US',   sector:'半導体',              currency:'USD', quantity:20,  avgPrice:430,   currentPrice:875,   prevClose:860,   note:'',        lastFetched:null, fetchError:null },
-    { id: uid(), ticker:'0131103C', yahooTicker:'0131103C.T', name:'eMAXIS Slim 全世界株式', market:'FUND', sector:'インデックスファンド', currency:'JPY', quantity:1000000, avgPrice:1.8, currentPrice:2.2, prevClose:2.18, note:'', lastFetched:null, fetchError:null, _perKuchi:true },
+    { id: uid(), ticker:'0331418A', yahooTicker:'0331418A.T', name:'eMAXIS Slim 全世界株式（オール・カントリー）', market:'FUND', sector:'インデックスファンド', currency:'JPY', quantity:1000000, avgPrice:1.8, currentPrice:null, prevClose:null, note:'', lastFetched:null, fetchError:null, _perKuchi:true },
   ];
 }
 
@@ -2110,7 +2122,9 @@ async function sbLoad(silent = false) {
       // 読み込んだ内容を「同期済み」として記録（次の自動保存での無駄な書き戻しを防ぐ）。
       // ログはクラウド側の内容で記録する: ローカル側にしかない日があればマージ結果と
       // 差分が出て dirty になり、次の保存で正しくアップロードされる。
-      _lastSynced.sp_stocks        = _canonicalStocks();
+      _lastSynced.sp_stocks        = cloudStocks.some(s => s.market === 'FUND' && s.ticker === '0131103C' && s.name === 'eMAXIS Slim 全世界株式')
+        ? JSON.stringify(cloudStocks.map(({ currentPrice, prevClose, dayChange, lastFetched, lastAttempted, fetchError, navDate, ...rest }) => rest))
+        : _canonicalStocks();
       _lastSynced.sp_portfolio_log = JSON.stringify(normalizePortfolioLog(cloudLog || []));
       if (Array.isArray(cloudCollateral)) _lastSynced.sp_collateral = JSON.stringify(collateralEntries);
       if (Array.isArray(cloudWatchlist)) _lastSynced.sp_watchlist = _canonicalWatchlist();
