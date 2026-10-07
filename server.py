@@ -1823,7 +1823,7 @@ def _run_pool(tickers: list, max_workers: int, pool_timeout: int, per_task_timeo
 
 
 # ── サーバー常駐の価格更新 ───────────────────────────────────────
-# Render は GitHub Actions の /api/health ping で起動状態を維持する。
+# Render は Supabase の pg_cron からの /api/health ping で起動状態を維持する。
 # ブラウザが閉じていても、このスレッドが Supabase 上の保有銘柄を読み、
 # 市場別 TTL に達した価格だけを更新して /api/prices のキャッシュを温める。
 BACKGROUND_PRICE_REFRESH = os.getenv('BACKGROUND_PRICE_REFRESH', '1').lower() in {'1', 'true', 'yes', 'on'}
@@ -1875,7 +1875,10 @@ def _load_tracked_tickers() -> list[str]:
 
     tickers = []
     supabase_url = os.getenv('SUPABASE_URL', DEFAULT_SUPABASE_URL).strip().rstrip('/')
-    supabase_key = os.getenv('SUPABASE_ANON_KEY', DEFAULT_SUPABASE_ANON_KEY).strip()
+    # user_data はログインユーザー限定（RLS）のため、サーバーは service_role キーで読む。
+    # キーは Render の環境変数にだけ置き、リポジトリには書かない。未設定なら従来の公開キー。
+    supabase_key = (os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+                    or os.getenv('SUPABASE_ANON_KEY', DEFAULT_SUPABASE_ANON_KEY).strip())
     if supabase_url and supabase_key:
         try:
             response = req.get(

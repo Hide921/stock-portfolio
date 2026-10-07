@@ -18,3 +18,6 @@ services:
         value: https://ugyashjjxoezvlnjtizw.supabase.co
       - key: SUPABASE_ANON_KEY
         value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVneWFzaGpqeG9lenZsbmp0aXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NTk4MzUsImV4cCI6MjA4OTIzNTgzNX0.B3--Rip09qFFwrEBxLE2Gx3Y3dIncEZd89JUJdXFSM4
+      # Supabase の service_role キー。Render のダッシュボードで値を設定する（リポジトリに書かない）
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
