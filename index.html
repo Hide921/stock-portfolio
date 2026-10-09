@@ -2,6 +2,10 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // この画面は家計アプリ（Cashflow）の投資タブへ移行した。データの同期はログインを共有する家計アプリ側で行う。
+    if (/\.onrender\.com$/.test(location.hostname)) location.replace('https://hide921.github.io/cashflow-app/?view=investments');
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>株式ポートフォリオ管理</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
